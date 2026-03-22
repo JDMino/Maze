@@ -55,6 +55,7 @@ No es un producto final ni comercial.
 
 1. Clonar el repositorio
 2. Abrir `index.html` en el navegador
+3. O ingresar a: https://jdmino.github.io/Maze/
 
 No requiere instalación ni dependencias.
 
