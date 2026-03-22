@@ -1,0 +1,69 @@
+body {
+    margin: 0;
+    background: #111;
+    color: white;
+    font-family: Arial;
+    text-align: center;
+    overflow-x: hidden;
+}
+
+#menu, #game, #victory, #gameover {
+    display: none;
+}
+
+#menu.active,
+#game.active,
+#victory.active,
+#gameover.active {
+    display: block;
+}
+
+canvas {
+    background: black;
+    display: block;
+    margin: 20px auto 10px auto;
+}
+
+#topBar {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 20px;
+}
+
+button {
+    padding: 10px 15px;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+/* Controles táctiles */
+#touchControls {
+    display: grid;
+    grid-template-columns: repeat(3, 70px);
+    grid-template-rows: 70px 70px;
+    gap: 15px;
+    justify-content: center;
+    margin-bottom: 20px;
+}
+
+.touchBtn {
+    background: rgba(255,255,255,0.3);
+    border: none;
+    border-radius: 12px;
+    font-size: 28px;
+    color: white;
+    touch-action: none;
+}
+
+.touchBtn:active {
+    background: rgba(255,255,255,0.6);
+}
+
+#up { grid-column: 2; grid-row: 1; }
+#left { grid-column: 1; grid-row: 2; }
+#down { grid-column: 2; grid-row: 2; }
+#right { grid-column: 3; grid-row: 2; }
+
+@media (min-width: 768px) {
+    #touchControls { display: none; }
+}
