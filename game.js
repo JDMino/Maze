@@ -170,7 +170,7 @@ function update() {
             let targetX = (e.target.x + 0.5) * size;
             let targetY = (e.target.y + 0.5) * size;
             let dx = targetX - e.x, dy = targetY - e.y;
-            let dist = Math.hypot(dx,dy), speedE = 1.5;
+            let dist = Math.hypot(dx,dy), speedE = 1;
             if(dist<speedE){ e.x=targetX; e.y=targetY; e.cx=e.target.x; e.cy=e.target.y; e.target=null; }
             else { e.x += dx/dist*speedE; e.y += dy/dist*speedE; }
         }
