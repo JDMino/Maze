@@ -28,12 +28,73 @@ resizeCanvas();
 document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
 document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 
-// INPUT táctil
-const touchMap = { up: "arrowup", down: "arrowdown", left: "arrowleft", right: "arrowright" };
-Object.keys(touchMap).forEach(dir => {
-    const btn = document.getElementById(dir);
-    btn.addEventListener("touchstart", e => { e.preventDefault(); keys[touchMap[dir]] = true; });
-    btn.addEventListener("touchend", e => { e.preventDefault(); keys[touchMap[dir]] = false; });
+// INPUT táctil - Touchpad
+let touchActive = false;
+let touchCenterX, touchCenterY;
+const touchpad = document.getElementById('touchpad');
+
+function updateTouchDirection(clientX, clientY) {
+    const rect = touchpad.getBoundingClientRect();
+    touchCenterX = rect.left + rect.width / 2;
+    touchCenterY = rect.top + rect.height / 2;
+    const dx = clientX - touchCenterX;
+    const dy = clientY - touchCenterY;
+    const distance = Math.hypot(dx, dy);
+    const maxDistance = rect.width / 2 - 15; // para no salir del borde
+
+    const clampedDistance = Math.min(distance, maxDistance);
+    const angle = Math.atan2(dy, dx);
+    const indicatorX = Math.cos(angle) * clampedDistance;
+    const indicatorY = Math.sin(angle) * clampedDistance;
+
+    const indicator = document.getElementById('touchIndicator');
+    indicator.style.transform = `translate(${indicatorX - 15}px, ${indicatorY - 15}px)`; // -15 para centrar
+
+    if (distance > 10) { // threshold para evitar movimientos pequeños
+        const angleDeg = angle * 180 / Math.PI;
+        // Reset keys
+        keys["arrowup"] = false;
+        keys["arrowdown"] = false;
+        keys["arrowleft"] = false;
+        keys["arrowright"] = false;
+
+        if (angleDeg >= -45 && angleDeg < 45) keys["arrowright"] = true; // right
+        else if (angleDeg >= 45 && angleDeg < 135) keys["arrowdown"] = true; // down
+        else if (angleDeg >= 135 || angleDeg < -135) keys["arrowleft"] = true; // left
+        else keys["arrowup"] = true; // up
+    } else {
+        // Si cerca del centro, no mover
+        keys["arrowup"] = false;
+        keys["arrowdown"] = false;
+        keys["arrowleft"] = false;
+        keys["arrowright"] = false;
+    }
+}
+
+touchpad.addEventListener('touchstart', e => {
+    e.preventDefault();
+    touchActive = true;
+    const touch = e.touches[0];
+    updateTouchDirection(touch.clientX, touch.clientY);
+});
+
+touchpad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (touchActive) {
+        const touch = e.touches[0];
+        updateTouchDirection(touch.clientX, touch.clientY);
+    }
+});
+
+touchpad.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchActive = false;
+    keys["arrowup"] = false;
+    keys["arrowdown"] = false;
+    keys["arrowleft"] = false;
+    keys["arrowright"] = false;
+    const indicator = document.getElementById('touchIndicator');
+    indicator.style.transform = 'translate(-50%, -50%)';
 });
 
 // Genera laberinto
