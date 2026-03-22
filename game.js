@@ -31,6 +31,7 @@ document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 // INPUT táctil - Touchpad
 let touchActive = false;
 let touchCenterX, touchCenterY;
+let touchDx = 0, touchDy = 0;
 const touchpad = document.getElementById('touchpad');
 
 function updateTouchDirection(clientX, clientY) {
@@ -51,23 +52,12 @@ function updateTouchDirection(clientX, clientY) {
     indicator.style.transform = `translate(${indicatorX - 15}px, ${indicatorY - 15}px)`; // -15 para centrar
 
     if (distance > 10) { // threshold para evitar movimientos pequeños
-        const angleDeg = angle * 180 / Math.PI;
-        // Reset keys
-        keys["arrowup"] = false;
-        keys["arrowdown"] = false;
-        keys["arrowleft"] = false;
-        keys["arrowright"] = false;
-
-        if (angleDeg >= -45 && angleDeg < 45) keys["arrowright"] = true; // right
-        else if (angleDeg >= 45 && angleDeg < 135) keys["arrowdown"] = true; // down
-        else if (angleDeg >= 135 || angleDeg < -135) keys["arrowleft"] = true; // left
-        else keys["arrowup"] = true; // up
+        const speed = 2; // misma velocidad que teclado
+        touchDx = Math.cos(angle) * speed;
+        touchDy = Math.sin(angle) * speed;
     } else {
-        // Si cerca del centro, no mover
-        keys["arrowup"] = false;
-        keys["arrowdown"] = false;
-        keys["arrowleft"] = false;
-        keys["arrowright"] = false;
+        touchDx = 0;
+        touchDy = 0;
     }
 }
 
@@ -89,10 +79,8 @@ touchpad.addEventListener('touchmove', e => {
 touchpad.addEventListener('touchend', e => {
     e.preventDefault();
     touchActive = false;
-    keys["arrowup"] = false;
-    keys["arrowdown"] = false;
-    keys["arrowleft"] = false;
-    keys["arrowright"] = false;
+    touchDx = 0;
+    touchDy = 0;
     const indicator = document.getElementById('touchIndicator');
     indicator.style.transform = 'translate(-50%, -50%)';
 });
@@ -150,11 +138,18 @@ function isColliding(x,y){
 // Update jugador y enemigos
 function update() {
     if(!running||!maze) return;
-    let speed = 2, newX = player.x, newY = player.y;
-    if(keys["arrowup"]||keys["w"]) newY -= speed;
-    if(keys["arrowdown"]||keys["s"]) newY += speed;
-    if(keys["arrowleft"]||keys["a"]) newX -= speed;
-    if(keys["arrowright"]||keys["d"]) newX += speed;
+    let speed = 2, dx = 0, dy = 0;
+    if(keys["arrowup"]||keys["w"]) dy -= speed;
+    if(keys["arrowdown"]||keys["s"]) dy += speed;
+    if(keys["arrowleft"]||keys["a"]) dx -= speed;
+    if(keys["arrowright"]||keys["d"]) dx += speed;
+
+    // Agregar movimiento táctil
+    dx += touchDx;
+    dy += touchDy;
+
+    let newX = player.x + dx;
+    let newY = player.y + dy;
 
     if(!isColliding(newX, player.y)) player.x = newX;
     if(!isColliding(player.x, newY)) player.y = newY;
