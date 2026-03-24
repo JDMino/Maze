@@ -3,18 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Random Maze</title>
+<title>Laberinto IA Responsive</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- MENU -->
 <div id="menu" class="active">
-    <h1>Random Maze</h1>
+    <h1>Laberinto</h1>
     <button onclick="startGame()">Play</button>
 </div>
 
-<!-- GAME -->
 <div id="game">
     <div id="topBar">
         <div>Tiempo: <span id="timer">0</span>s</div>
@@ -22,7 +20,6 @@
     </div>
     <canvas id="canvas"></canvas>
 
-    <!-- Controles táctiles -->
     <div id="touchControls">
         <div id="touchpad">
             <div id="touchIndicator"></div>
@@ -30,14 +27,12 @@
     </div>
 </div>
 
-<!-- VICTORY -->
 <div id="victory">
     <h1>¡Ganaste!</h1>
     <p>Tiempo: <span id="finalTime"></span>s</p>
     <button onclick="goMenu()">Volver al menú</button>
 </div>
 
-<!-- GAME OVER -->
 <div id="gameover">
     <h1>Game Over</h1>
     <button onclick="goMenu()">Volver al menú</button>

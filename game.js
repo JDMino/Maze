@@ -3,8 +3,7 @@ const ctx = canvas.getContext("2d");
 
 const rows = 25;
 const cols = 25;
-const baseSize = 25;
-let size = baseSize;
+let size = 25;
 
 let maze = null;
 let keys = {};
@@ -13,7 +12,13 @@ let timer = 0;
 let interval;
 let running = false;
 
-// Ajuste responsive
+// 🛡️ ESCUDO
+let shieldActive = true;
+let shieldBlinking = false;
+let shieldVisible = true;
+let shieldTimer = 0;
+
+// RESPONSIVE
 function resizeCanvas() {
     const maxWidth = window.innerWidth - 20;
     const maxHeight = window.innerHeight - 240;
@@ -24,68 +29,11 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// INPUT teclado
+// INPUT
 document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
 document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
 
-// INPUT táctil - Touchpad
-let touchActive = false;
-let touchCenterX, touchCenterY;
-let touchDx = 0, touchDy = 0;
-const touchpad = document.getElementById('touchpad');
-
-function updateTouchDirection(clientX, clientY) {
-    const rect = touchpad.getBoundingClientRect();
-    touchCenterX = rect.left + rect.width / 2;
-    touchCenterY = rect.top + rect.height / 2;
-    const dx = clientX - touchCenterX;
-    const dy = clientY - touchCenterY;
-    const distance = Math.hypot(dx, dy);
-    const maxDistance = rect.width / 2 - 15; // para no salir del borde
-
-    const clampedDistance = Math.min(distance, maxDistance);
-    const angle = Math.atan2(dy, dx);
-    const indicatorX = Math.cos(angle) * clampedDistance;
-    const indicatorY = Math.sin(angle) * clampedDistance;
-
-    const indicator = document.getElementById('touchIndicator');
-    indicator.style.transform = `translate(${indicatorX - 15}px, ${indicatorY - 15}px)`; // -15 para centrar
-
-    if (distance > 10) { // threshold para evitar movimientos pequeños
-        const speed = 2; // misma velocidad que teclado
-        touchDx = Math.cos(angle) * speed;
-        touchDy = Math.sin(angle) * speed;
-    } else {
-        touchDx = 0;
-        touchDy = 0;
-    }
-}
-
-touchpad.addEventListener('touchstart', e => {
-    e.preventDefault();
-    touchActive = true;
-    const touch = e.touches[0];
-    updateTouchDirection(touch.clientX, touch.clientY);
-});
-
-touchpad.addEventListener('touchmove', e => {
-    e.preventDefault();
-    if (touchActive) {
-        const touch = e.touches[0];
-        updateTouchDirection(touch.clientX, touch.clientY);
-    }
-});
-
-touchpad.addEventListener('touchend', e => {
-    e.preventDefault();
-    touchActive = false;
-    touchDx = 0;
-    touchDy = 0;
-    const indicator = document.getElementById('touchIndicator');
-    indicator.style.transform = 'translate(-50%, -50%)';
-});
-
-// Genera laberinto
+// LABERINTO
 function generateMaze() {
     let grid = [];
     for (let r = 0; r < rows; r++) {
@@ -111,7 +59,7 @@ function generateMaze() {
     return grid;
 }
 
-// Vecinos válidos
+// VECINOS (IA enemigos)
 function getNeighbors(cx, cy) {
     let cell = maze[cy][cx];
     let neighbors = [];
@@ -122,7 +70,7 @@ function getNeighbors(cx, cy) {
     return neighbors;
 }
 
-// Colisiones
+// COLISIONES
 function isColliding(x,y){
     if(!maze) return true;
     let c=Math.floor(x/size), r=Math.floor(y/size);
@@ -135,18 +83,15 @@ function isColliding(x,y){
     return false;
 }
 
-// Update jugador y enemigos
+// UPDATE
 function update() {
     if(!running||!maze) return;
+
     let speed = 2, dx = 0, dy = 0;
     if(keys["arrowup"]||keys["w"]) dy -= speed;
     if(keys["arrowdown"]||keys["s"]) dy += speed;
     if(keys["arrowleft"]||keys["a"]) dx -= speed;
     if(keys["arrowright"]||keys["d"]) dx += speed;
-
-    // Agregar movimiento táctil
-    dx += touchDx;
-    dy += touchDy;
 
     let newX = player.x + dx;
     let newY = player.y + dy;
@@ -154,10 +99,19 @@ function update() {
     if(!isColliding(newX, player.y)) player.x = newX;
     if(!isColliding(player.x, newY)) player.y = newY;
 
-    player.x = Math.max(0, Math.min(canvas.width, player.x));
-    player.y = Math.max(0, Math.min(canvas.height, player.y));
+    // 🛡️ ESCUDO
+    if (shieldBlinking) {
+        shieldTimer--;
+        shieldVisible = !shieldVisible;
 
-    // Enemigos
+        if (shieldTimer <= 0) {
+            shieldActive = false;
+            shieldBlinking = false;
+            shieldVisible = false;
+        }
+    }
+
+    // ENEMIGOS (IA ORIGINAL)
     enemies.forEach(e=>{
         if(!e.target){
             let neighbors = getNeighbors(e.cx,e.cy);
@@ -166,30 +120,52 @@ function update() {
             let next = neighbors[Math.floor(Math.random()*neighbors.length)];
             if(next){ e.target=next; e.lastDir=next.dir; }
         }
+
         if(e.target){
             let targetX = (e.target.x + 0.5) * size;
             let targetY = (e.target.y + 0.5) * size;
             let dx = targetX - e.x, dy = targetY - e.y;
-            let dist = Math.hypot(dx,dy), speedE = 1;
-            if(dist<speedE){ e.x=targetX; e.y=targetY; e.cx=e.target.x; e.cy=e.target.y; e.target=null; }
-            else { e.x += dx/dist*speedE; e.y += dy/dist*speedE; }
+            let dist = Math.hypot(dx,dy), speedE = 1.5;
+
+            if(dist<speedE){
+                e.x=targetX; e.y=targetY;
+                e.cx=e.target.x; e.cy=e.target.y;
+                e.target=null;
+            } else {
+                e.x += dx/dist*speedE;
+                e.y += dy/dist*speedE;
+            }
         }
-        if(Math.hypot(player.x-e.x,player.y-e.y)<10) gameOver();
+
+        // 💥 COLISIÓN CON ESCUDO
+        if(Math.hypot(player.x-e.x,player.y-e.y)<10){
+            if(shieldActive){
+                if(!shieldBlinking){
+                    shieldBlinking = true;
+                    shieldTimer = 180; // 3 segundos
+                }
+            } else {
+                gameOver();
+            }
+        }
     });
 
     checkWin();
 }
 
-// Dibujo laberinto
+// DRAW (RESTAURADO COMPLETO)
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
+
     if(!maze) return;
+
     ctx.strokeStyle="white";
+
     for(let r=0;r<rows;r++){
-        let row = maze[r]; if(!row) continue;
         for(let c=0;c<cols;c++){
-            let cell=row[c]; if(!cell) continue;
+            let cell=maze[r][c];
             let x=c*size, y=r*size;
+
             ctx.beginPath();
             if(cell.walls[0]) ctx.moveTo(x,y), ctx.lineTo(x+size,y);
             if(cell.walls[1]) ctx.moveTo(x+size,y), ctx.lineTo(x+size,y+size);
@@ -198,17 +174,46 @@ function draw(){
             ctx.stroke();
         }
     }
-    ctx.fillStyle="green"; ctx.fillRect(end.x-6,end.y-6,12,12);
-    ctx.fillStyle="red"; ctx.beginPath(); ctx.arc(player.x,player.y,6,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="yellow"; enemies.forEach(e=>{ ctx.beginPath(); ctx.arc(e.x,e.y,6,0,Math.PI*2); ctx.fill(); });
+
+    // META
+    ctx.fillStyle="green";
+    ctx.fillRect(end.x-6,end.y-6,12,12);
+
+    // JUGADOR
+    ctx.fillStyle="red";
+    ctx.beginPath();
+    ctx.arc(player.x,player.y,6,0,Math.PI*2);
+    ctx.fill();
+
+    // 🛡️ ESCUDO
+    if(shieldActive && shieldVisible){
+        ctx.strokeStyle="cyan";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(player.x,player.y,12,0,Math.PI*2);
+        ctx.stroke();
+    }
+
+    // ENEMIGOS
+    ctx.fillStyle="yellow";
+    enemies.forEach(e=>{
+        ctx.beginPath();
+        ctx.arc(e.x,e.y,6,0,Math.PI*2);
+        ctx.fill();
+    });
 }
 
 // LOOP
-function loop(){ update(); draw(); requestAnimationFrame(loop); }
+function loop(){
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
 
-// FUNCIONES DEL JUEGO
+// START
 function startGame(){
     maze = generateMaze();
+
     player = {x: size/2, y: size/2};
     end = {x: (cols*size)-size/2, y: (rows*size)-size/2};
 
@@ -216,25 +221,41 @@ function startGame(){
     for(let i=0;i<5;i++){
         let cx = Math.floor(Math.random()*cols);
         let cy = Math.floor(Math.random()*rows);
-        enemies.push({cx, cy, x:(cx+0.5)*size, y:(cy+0.5)*size, target:null, lastDir:null});
+        enemies.push({
+            cx, cy,
+            x:(cx+0.5)*size,
+            y:(cy+0.5)*size,
+            target:null,
+            lastDir:null
+        });
     }
 
-    timer=0; document.getElementById("timer").textContent=0;
+    // reset escudo
+    shieldActive = true;
+    shieldBlinking = false;
+    shieldVisible = true;
+
+    timer=0;
+    document.getElementById("timer").textContent=0;
+
     clearInterval(interval);
-    interval = setInterval(()=>{ timer++; document.getElementById("timer").textContent=timer; },1000);
+    interval = setInterval(()=>{
+        timer++;
+        document.getElementById("timer").textContent=timer;
+    },1000);
 
     document.getElementById("menu").classList.remove("active");
-    document.getElementById("victory").classList.remove("active");
-    document.getElementById("gameover").classList.remove("active");
     document.getElementById("game").classList.add("active");
 
     resizeCanvas();
     running = true;
 }
 
+// WIN / LOSE
 function checkWin(){
     if(Math.hypot(player.x-end.x, player.y-end.y)<10){
-        running=false; clearInterval(interval);
+        running=false;
+        clearInterval(interval);
         document.getElementById("finalTime").textContent = timer;
         document.getElementById("game").classList.remove("active");
         document.getElementById("victory").classList.add("active");
@@ -242,13 +263,16 @@ function checkWin(){
 }
 
 function gameOver(){
-    running=false; clearInterval(interval);
+    running=false;
+    clearInterval(interval);
     document.getElementById("game").classList.remove("active");
     document.getElementById("gameover").classList.add("active");
 }
 
 function goMenu(){
-    running=false; maze=null; clearInterval(interval);
+    running=false;
+    maze=null;
+    clearInterval(interval);
     document.getElementById("game").classList.remove("active");
     document.getElementById("victory").classList.remove("active");
     document.getElementById("gameover").classList.remove("active");
