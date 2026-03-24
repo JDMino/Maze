@@ -18,6 +18,11 @@ let shieldBlinking = false;
 let shieldVisible = true;
 let shieldTimer = 0;
 
+// 📱 TOUCH
+let touchActive = false;
+let touchDx = 0, touchDy = 0;
+const touchpad = document.getElementById('touchpad');
+
 // RESPONSIVE
 function resizeCanvas() {
     const maxWidth = window.innerWidth - 20;
@@ -29,9 +34,63 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// INPUT
+// ⌨️ INPUT TECLADO
 document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
 document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+
+// 📱 TOUCHPAD
+function updateTouchDirection(clientX, clientY) {
+    const rect = touchpad.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+
+    const dx = clientX - centerX;
+    const dy = clientY - centerY;
+
+    const distance = Math.hypot(dx, dy);
+    const maxDistance = rect.width / 2 - 15;
+
+    const clamped = Math.min(distance, maxDistance);
+    const angle = Math.atan2(dy, dx);
+
+    const indicatorX = Math.cos(angle) * clamped;
+    const indicatorY = Math.sin(angle) * clamped;
+
+    const indicator = document.getElementById('touchIndicator');
+    indicator.style.transform = `translate(${indicatorX - 15}px, ${indicatorY - 15}px)`;
+
+    if (distance > 10) {
+        const speed = 2;
+        touchDx = Math.cos(angle) * speed;
+        touchDy = Math.sin(angle) * speed;
+    } else {
+        touchDx = 0;
+        touchDy = 0;
+    }
+}
+
+touchpad.addEventListener('touchstart', e => {
+    e.preventDefault();
+    touchActive = true;
+    const t = e.touches[0];
+    updateTouchDirection(t.clientX, t.clientY);
+});
+
+touchpad.addEventListener('touchmove', e => {
+    e.preventDefault();
+    if (touchActive) {
+        const t = e.touches[0];
+        updateTouchDirection(t.clientX, t.clientY);
+    }
+});
+
+touchpad.addEventListener('touchend', e => {
+    e.preventDefault();
+    touchActive = false;
+    touchDx = 0;
+    touchDy = 0;
+    document.getElementById('touchIndicator').style.transform = 'translate(-50%, -50%)';
+});
 
 // LABERINTO
 function generateMaze() {
@@ -59,7 +118,7 @@ function generateMaze() {
     return grid;
 }
 
-// VECINOS (IA enemigos)
+// VECINOS
 function getNeighbors(cx, cy) {
     let cell = maze[cy][cx];
     let neighbors = [];
@@ -88,10 +147,15 @@ function update() {
     if(!running||!maze) return;
 
     let speed = 2, dx = 0, dy = 0;
+
     if(keys["arrowup"]||keys["w"]) dy -= speed;
     if(keys["arrowdown"]||keys["s"]) dy += speed;
     if(keys["arrowleft"]||keys["a"]) dx -= speed;
     if(keys["arrowright"]||keys["d"]) dx += speed;
+
+    // 📱 sumar touch
+    dx += touchDx;
+    dy += touchDy;
 
     let newX = player.x + dx;
     let newY = player.y + dy;
@@ -111,7 +175,7 @@ function update() {
         }
     }
 
-    // ENEMIGOS (IA ORIGINAL)
+    // ENEMIGOS
     enemies.forEach(e=>{
         if(!e.target){
             let neighbors = getNeighbors(e.cx,e.cy);
@@ -137,12 +201,11 @@ function update() {
             }
         }
 
-        // 💥 COLISIÓN CON ESCUDO
         if(Math.hypot(player.x-e.x,player.y-e.y)<10){
             if(shieldActive){
                 if(!shieldBlinking){
                     shieldBlinking = true;
-                    shieldTimer = 180; // 3 segundos
+                    shieldTimer = 180;
                 }
             } else {
                 gameOver();
@@ -153,10 +216,9 @@ function update() {
     checkWin();
 }
 
-// DRAW (RESTAURADO COMPLETO)
+// DRAW
 function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
-
     if(!maze) return;
 
     ctx.strokeStyle="white";
@@ -175,17 +237,14 @@ function draw(){
         }
     }
 
-    // META
     ctx.fillStyle="green";
     ctx.fillRect(end.x-6,end.y-6,12,12);
 
-    // JUGADOR
     ctx.fillStyle="red";
     ctx.beginPath();
     ctx.arc(player.x,player.y,6,0,Math.PI*2);
     ctx.fill();
 
-    // 🛡️ ESCUDO
     if(shieldActive && shieldVisible){
         ctx.strokeStyle="cyan";
         ctx.lineWidth = 2;
@@ -194,7 +253,6 @@ function draw(){
         ctx.stroke();
     }
 
-    // ENEMIGOS
     ctx.fillStyle="yellow";
     enemies.forEach(e=>{
         ctx.beginPath();
@@ -230,7 +288,6 @@ function startGame(){
         });
     }
 
-    // reset escudo
     shieldActive = true;
     shieldBlinking = false;
     shieldVisible = true;
@@ -251,7 +308,6 @@ function startGame(){
     running = true;
 }
 
-// WIN / LOSE
 function checkWin(){
     if(Math.hypot(player.x-end.x, player.y-end.y)<10){
         running=false;
