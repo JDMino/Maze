@@ -4,6 +4,8 @@ const ctx = canvas.getContext("2d");
 const rows = 25;
 const cols = 25;
 let size = 25;
+let playerRadius = 6;
+let enemyRadius = 6;
 
 let maze = null;
 let keys = {};
@@ -33,6 +35,8 @@ function resizeCanvas() {
     size = Math.floor(Math.min(maxWidth / cols, maxHeight / rows));
     canvas.width = size * cols;
     canvas.height = size * rows;
+    playerRadius = Math.max(3, Math.floor(size * 0.24));
+    enemyRadius = Math.max(3, Math.floor(size * 0.24));
 }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
@@ -133,24 +137,64 @@ function getNeighbors(cx, cy) {
     return n;
 }
 
-// COLISIONES
-function isColliding(x,y){
-    if(!maze) return true;
-    let c=Math.floor(x/size), r=Math.floor(y/size);
-    if(c<0||r<0||c>=cols||r>=rows) return true;
-
+// COLISIONES CIRCULARES
+function isCollidingCircle(x, y, radius) {
+    if (!maze) return true;
+    let c = Math.floor(x / size), r = Math.floor(y / size);
+    if (c < 0 || r < 0 || c >= cols || r >= rows) return true;
     let cell = maze[r][c];
-    let ox=x%size, oy=y%size;
+    let ox = x - c * size;
+    let oy = y - r * size;
 
-    if(cell.walls[0] && oy<2) return true;
-    if(cell.walls[2] && oy>size-2) return true;
-    if(cell.walls[3] && ox<2) return true;
-    if(cell.walls[1] && ox>size-2) return true;
+    // Revisar paredes de la celda actual
+    if (cell.walls[0] && oy - radius < 0) return true;
+    if (cell.walls[2] && oy + radius > size) return true;
+    if (cell.walls[3] && ox - radius < 0) return true;
+    if (cell.walls[1] && ox + radius > size) return true;
+
+    // Revisar paredes de celdas vecinas si el círculo sobresale
+    if (oy - radius < 0 && r > 0) {
+        let up = maze[r - 1][c];
+        if (up.walls[2]) return true;
+    }
+    if (oy + radius > size && r < rows - 1) {
+        let down = maze[r + 1][c];
+        if (down.walls[0]) return true;
+    }
+    if (ox - radius < 0 && c > 0) {
+        let left = maze[r][c - 1];
+        if (left.walls[1]) return true;
+    }
+    if (ox + radius > size && c < cols - 1) {
+        let right = maze[r][c + 1];
+        if (right.walls[3]) return true;
+    }
+
+    // Colisión de esquinas en puntos exactos (bloqueo de paso diagonal por puntito)
+    const cornerHitbox = Math.max(1, Math.floor(size * 0.08));
+    const cornerThreshold = (radius + cornerHitbox) ** 2;
+    const checkCorner = (cx, cy, blocked) => {
+        if (!blocked) return false;
+        const dx = x - cx;
+        const dy = y - cy;
+        return dx * dx + dy * dy < cornerThreshold;
+    };
+
+    const topWall = cell.walls[0] || (r > 0 && maze[r - 1][c].walls[2]);
+    const bottomWall = cell.walls[2] || (r < rows - 1 && maze[r + 1][c].walls[0]);
+    const leftWall = cell.walls[3] || (c > 0 && maze[r][c - 1].walls[1]);
+    const rightWall = cell.walls[1] || (c < cols - 1 && maze[r][c + 1].walls[3]);
+
+    // Esquinas relativas a la celda
+    if (checkCorner(c * size, r * size, topWall && leftWall)) return true;
+    if (checkCorner((c + 1) * size, r * size, topWall && rightWall)) return true;
+    if (checkCorner(c * size, (r + 1) * size, bottomWall && leftWall)) return true;
+    if (checkCorner((c + 1) * size, (r + 1) * size, bottomWall && rightWall)) return true;
 
     return false;
 }
 
-// 🧠 MOVIMIENTO SEGURO (FIX REAL)
+// 🧠 MOVIMIENTO SEGURO (CIRCULAR)
 function movePlayer(dx, dy, delta) {
     let steps = Math.ceil(Math.max(Math.abs(dx), Math.abs(dy)) * delta / 4);
     steps = Math.max(1, steps);
@@ -158,16 +202,16 @@ function movePlayer(dx, dy, delta) {
     let stepX = (dx * delta) / steps;
     let stepY = (dy * delta) / steps;
 
-    for(let i=0;i<steps;i++){
+    for (let i = 0; i < steps; i++) {
         let nx = player.x + stepX;
         let ny = player.y + stepY;
 
-        if(!isColliding(nx, ny)){
+        if (!isCollidingCircle(nx, ny, playerRadius)) {
             player.x = nx;
             player.y = ny;
         } else {
-            if(!isColliding(nx, player.y)) player.x = nx;
-            if(!isColliding(player.x, ny)) player.y = ny;
+            if (!isCollidingCircle(nx, player.y, playerRadius)) player.x = nx;
+            if (!isCollidingCircle(player.x, ny, playerRadius)) player.y = ny;
         }
     }
 }
@@ -202,39 +246,51 @@ function update(delta) {
     }
 
     // ENEMIGOS
-    enemies.forEach(e=>{
-        if(!e.target){
-            let n = getNeighbors(e.cx,e.cy);
-            if(n.length>1 && e.lastDir!==null)
-                n = n.filter(x=>(x.dir+2)%4!==e.lastDir);
-            let next = n[Math.floor(Math.random()*n.length)];
-            if(next){ e.target=next; e.lastDir=next.dir; }
+    enemies.forEach(e => {
+        if (!e.target) {
+            let n = getNeighbors(e.cx, e.cy);
+            if (n.length > 1 && e.lastDir !== null)
+                n = n.filter(x => (x.dir + 2) % 4 !== e.lastDir);
+            let next = n[Math.floor(Math.random() * n.length)];
+            if (next) { e.target = next; e.lastDir = next.dir; }
         }
 
-        if(e.target){
-            let tx=(e.target.x+0.5)*size;
-            let ty=(e.target.y+0.5)*size;
+        if (e.target) {
+            let tx = (e.target.x + 0.5) * size;
+            let ty = (e.target.y + 0.5) * size;
 
-            let dx=tx-e.x, dy=ty-e.y;
-            let dist=Math.hypot(dx,dy);
+            let dx = tx - e.x, dy = ty - e.y;
+            let dist = Math.hypot(dx, dy);
 
-            const speedE=90;
+            const speedE = 90;
 
-            if(dist < speedE * delta){
-                e.x=tx; e.y=ty;
-                e.cx=e.target.x; e.cy=e.target.y;
-                e.target=null;
+            // Movimiento seguro para enemigos (circular)
+            let moveX = dx / dist * speedE * delta;
+            let moveY = dy / dist * speedE * delta;
+            let nx = e.x + moveX;
+            let ny = e.y + moveY;
+
+            if (!isCollidingCircle(nx, ny, enemyRadius)) {
+                e.x = nx;
+                e.y = ny;
             } else {
-                e.x += dx/dist*speedE*delta;
-                e.y += dy/dist*speedE*delta;
+                if (!isCollidingCircle(nx, e.y, enemyRadius)) e.x = nx;
+                if (!isCollidingCircle(e.x, ny, enemyRadius)) e.y = ny;
+            }
+
+            // Si llega al destino
+            if (Math.hypot(e.x - tx, e.y - ty) < 2) {
+                e.x = tx; e.y = ty;
+                e.cx = e.target.x; e.cy = e.target.y;
+                e.target = null;
             }
         }
 
-        if(Math.hypot(player.x-e.x,player.y-e.y)<10){
-            if(shieldActive){
-                if(!shieldBlinking){
-                    shieldBlinking=true;
-                    shieldTimer=3;
+        if (Math.hypot(player.x - e.x, player.y - e.y) < playerRadius + enemyRadius) {
+            if (shieldActive) {
+                if (!shieldBlinking) {
+                    shieldBlinking = true;
+                    shieldTimer = 3;
                 }
             } else gameOver();
         }
@@ -269,21 +325,21 @@ function draw(){
 
     ctx.fillStyle="red";
     ctx.beginPath();
-    ctx.arc(player.x,player.y,6,0,Math.PI*2);
+    ctx.arc(player.x, player.y, playerRadius, 0, Math.PI * 2);
     ctx.fill();
 
-    if(shieldActive && shieldVisible){
-        ctx.strokeStyle="cyan";
-        ctx.lineWidth=2;
+    if (shieldActive && shieldVisible) {
+        ctx.strokeStyle = "cyan";
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(player.x,player.y,12,0,Math.PI*2);
+        ctx.arc(player.x, player.y, playerRadius + 6, 0, Math.PI * 2);
         ctx.stroke();
     }
 
     ctx.fillStyle="yellow";
     enemies.forEach(e=>{
         ctx.beginPath();
-        ctx.arc(e.x,e.y,6,0,Math.PI*2);
+        ctx.arc(e.x, e.y, enemyRadius, 0, Math.PI*2);
         ctx.fill();
     });
 }
