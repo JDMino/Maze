@@ -6,6 +6,92 @@
 const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
+// ─── QUALITY PRESETS ─────────────────────────
+const QUALITY_PRESETS = {
+  low: {
+    label: 'LOW',
+    desc: 'Max performance',
+    wallGlow: false,       // no shadowBlur on walls
+    entityGlow: false,     // no shadowBlur on player/enemies
+    gradients: false,      // flat colors instead of radial gradients
+    particles: false,      // no particle system
+    trailLength: 0,        // no player trail
+    powerupGlow: false,    // no glow on powerups
+    endGlow: false,        // no glow on exit
+    gridDots: false,       // no background grid dots
+    menuAnim: false,       // static menu background
+    menuNodeCount: 0,
+    fpsTarget: 30,         // frame cap
+    mazeCached: true,      // pre-render maze to offscreen canvas
+    particleMax: 0,
+    shieldPulse: false,    // shield is static, no sin pulse
+  },
+  medium: {
+    label: 'MEDIUM',
+    desc: 'Balanced',
+    wallGlow: true,
+    entityGlow: true,
+    gradients: true,
+    particles: true,
+    trailLength: 8,
+    powerupGlow: true,
+    endGlow: true,
+    gridDots: false,
+    menuAnim: true,
+    menuNodeCount: 25,
+    fpsTarget: 60,
+    mazeCached: true,
+    particleMax: 30,
+    shieldPulse: false,
+  },
+  high: {
+    label: 'HIGH',
+    desc: 'Full effects',
+    wallGlow: true,
+    entityGlow: true,
+    gradients: true,
+    particles: true,
+    trailLength: 18,
+    powerupGlow: true,
+    endGlow: true,
+    gridDots: true,
+    menuAnim: true,
+    menuNodeCount: 60,
+    fpsTarget: 60,
+    mazeCached: false,      // re-draw each frame (allows glow per-frame)
+    particleMax: 120,
+    shieldPulse: true,
+  },
+};
+
+// Active quality — load from localStorage or default 'high'
+let currentQuality = 'high';
+try { const q = localStorage.getItem('nexus_quality'); if(QUALITY_PRESETS[q]) currentQuality = q; } catch(e){}
+let GFX = QUALITY_PRESETS[currentQuality];
+
+function setQuality(key) {
+  if(!QUALITY_PRESETS[key]) return;
+  currentQuality = key;
+  GFX = QUALITY_PRESETS[key];
+  try { localStorage.setItem('nexus_quality', key); } catch(e){}
+  // Invalidate maze cache
+  mazeCache = null;
+  // Update selector UI
+  document.querySelectorAll('.quality-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.q === key);
+  });
+}
+
+// Offscreen canvas for maze cache
+let mazeCache = null;
+let mazeCacheColors = null;
+
+function invalidateMazeCache() { mazeCache = null; mazeCacheColors = null; }
+
+// FPS limiter state
+let fpsInterval = 1000/60;
+let fpsLastTime = 0;
+
 // ─── CONFIG ──────────────────────────────────
 const BASE_ROWS = 15;
 const BASE_COLS = 15;
@@ -265,6 +351,10 @@ function moveEntity(entity, dx, dy, delta, radius) {
 
 // ─── PARTICLES ───────────────────────────────
 function spawnParticles(x,y,color,count=8,speed=80,life=0.6) {
+  if(!GFX.particles) return;
+  const allowed = Math.min(count, GFX.particleMax - particles.length);
+  if(allowed <= 0) return;
+  count = allowed;
   for(let i=0;i<count;i++) {
     const angle = Math.random()*Math.PI*2;
     const spd = speed*(0.4+Math.random()*0.6);
@@ -303,8 +393,9 @@ function drawParticles() {
 
 // ─── TRAIL ───────────────────────────────────
 function updateTrail() {
+  if(GFX.trailLength === 0) { playerTrail = []; return; }
   playerTrail.unshift({x:player.x,y:player.y,life:1});
-  if(playerTrail.length>18) playerTrail.pop();
+  if(playerTrail.length > GFX.trailLength) playerTrail.pop();
   for(const t of playerTrail) t.life-=0.06;
 }
 
@@ -546,491 +637,4 @@ function handleDeath() {
     setTimeout(()=>triggerGameOver(),600);
   } else {
     // Respawn
-    player.x=size/2; player.y=size/2;
-    playerTrail=[];
-    spawnParticles(player.x,player.y,'#ff6600',20,100,0.6);
-  }
-}
-
-// ─── NEIGHBOR HELPER ─────────────────────────
-function getNeighbors(mz,cx,cy) {
-  const cell=mz[cy][cx], n=[];
-  if(!cell.walls[0]&&cy>0) n.push({x:cx,y:cy-1});
-  if(!cell.walls[1]&&cx<cols-1) n.push({x:cx+1,y:cy});
-  if(!cell.walls[2]&&cy<rows-1) n.push({x:cx,y:cy+1});
-  if(!cell.walls[3]&&cx>0) n.push({x:cx-1,y:cy});
-  return n;
-}
-
-// ─── DRAW ────────────────────────────────────
-// Color palettes per level group
-function getLevelColors() {
-  const palettes=[
-    {wall:'#00f5ff',bg:'#000d14',end:'#00ff88',endGlow:'#00ff88'},
-    {wall:'#ff00aa',bg:'#14000e',end:'#ffe600',endGlow:'#ffe600'},
-    {wall:'#ffe600',bg:'#141000',end:'#00f5ff',endGlow:'#00f5ff'},
-    {wall:'#00ff88',bg:'#001410',end:'#ff00aa',endGlow:'#ff00aa'},
-  ];
-  return palettes[(currentLevel-1)%palettes.length];
-}
-
-function drawMaze(colors) {
-  ctx.strokeStyle=colors.wall;
-  ctx.lineWidth=1.5;
-  // Glow on walls
-  ctx.shadowColor=colors.wall;
-  ctx.shadowBlur=3;
-
-  for(let r=0;r<rows;r++){
-    for(let c=0;c<cols;c++){
-      // Fog of war
-      if(fogOfWar&&revealedCells&&!revealedCells[r][c]) continue;
-      const cell=maze[r][c];
-      const x=c*size, y=r*size;
-      ctx.beginPath();
-      if(cell.walls[0]){ctx.moveTo(x,y);ctx.lineTo(x+size,y);}
-      if(cell.walls[1]){ctx.moveTo(x+size,y);ctx.lineTo(x+size,y+size);}
-      if(cell.walls[2]){ctx.moveTo(x,y+size);ctx.lineTo(x+size,y+size);}
-      if(cell.walls[3]){ctx.moveTo(x,y);ctx.lineTo(x,y+size);}
-      ctx.stroke();
-    }
-  }
-  ctx.shadowBlur=0;
-}
-
-function drawEnd(colors) {
-  const ex=endCell.x*size+size/2, ey=endCell.y*size+size/2;
-  const t=Date.now()/1000;
-  const pulse=Math.sin(t*3)*0.2+0.8;
-  const outerR=size*0.4*pulse;
-
-  ctx.shadowColor=colors.endGlow;
-  ctx.shadowBlur=20*pulse;
-
-  // Outer ring
-  ctx.strokeStyle=colors.end;
-  ctx.lineWidth=1.5;
-  ctx.beginPath();
-  ctx.arc(ex,ey,outerR,0,Math.PI*2);
-  ctx.stroke();
-
-  // Inner fill
-  ctx.fillStyle=colors.end;
-  ctx.globalAlpha=0.3*pulse;
-  ctx.beginPath();
-  ctx.arc(ex,ey,outerR*0.6,0,Math.PI*2);
-  ctx.fill();
-  ctx.globalAlpha=1;
-
-  // Diamond
-  ctx.fillStyle=colors.end;
-  ctx.beginPath();
-  const s=size*0.18;
-  ctx.moveTo(ex,ey-s);ctx.lineTo(ex+s,ey);ctx.lineTo(ex,ey+s);ctx.lineTo(ex-s,ey);
-  ctx.closePath();
-  ctx.fill();
-
-  ctx.shadowBlur=0;
-}
-
-function drawPlayer() {
-  drawTrail();
-  const t=Date.now()/1000;
-
-  // Shield ring
-  if(shieldActive) {
-    const alpha=0.6+Math.sin(t*8)*0.2;
-    ctx.globalAlpha=alpha;
-    ctx.strokeStyle='#00f5ff';
-    ctx.lineWidth=2;
-    ctx.shadowColor='#00f5ff';
-    ctx.shadowBlur=15;
-    ctx.beginPath();
-    ctx.arc(player.x,player.y,playerRadius+7,0,Math.PI*2);
-    ctx.stroke();
-    ctx.shadowBlur=0;
-    ctx.globalAlpha=1;
-  }
-
-  // Player body
-  const grad=ctx.createRadialGradient(player.x-2,player.y-2,0,player.x,player.y,playerRadius);
-  grad.addColorStop(0,'#ff6688');
-  grad.addColorStop(1,'#cc0033');
-  ctx.shadowColor='#ff2244';
-  ctx.shadowBlur=12;
-  ctx.fillStyle=grad;
-  ctx.beginPath();
-  ctx.arc(player.x,player.y,playerRadius,0,Math.PI*2);
-  ctx.fill();
-  ctx.shadowBlur=0;
-
-  // Speed boost aura
-  if(speedBoost>0) {
-    ctx.globalAlpha=0.5+Math.sin(t*10)*0.2;
-    ctx.strokeStyle='#ffe600';
-    ctx.lineWidth=2;
-    ctx.beginPath();
-    ctx.arc(player.x,player.y,playerRadius+4,0,Math.PI*2);
-    ctx.stroke();
-    ctx.globalAlpha=1;
-  }
-}
-
-function drawEnemies() {
-  const t=Date.now()/1000;
-  enemies.forEach((e,i)=>{
-    const frozen=freezeEnemies>0;
-    const color=frozen?'#00aaff':(e.smart?'#ffaa00':'#ff4400');
-    const glowColor=frozen?'#00aaff':(e.smart?'#ff6600':'#ff2200');
-
-    ctx.shadowColor=glowColor;
-    ctx.shadowBlur=frozen?8:12;
-
-    const pulse=Math.sin(t*4+i)*0.15+0.85;
-    const grad=ctx.createRadialGradient(e.x-1,e.y-2,0,e.x,e.y,enemyRadius);
-    grad.addColorStop(0,frozen?'#44ccff':e.smart?'#ffdd44':'#ff8866');
-    grad.addColorStop(1,color);
-    ctx.fillStyle=grad;
-    ctx.beginPath();
-    ctx.arc(e.x,e.y,enemyRadius*pulse,0,Math.PI*2);
-    ctx.fill();
-
-    // Eye
-    ctx.shadowBlur=0;
-    ctx.fillStyle='white';
-    ctx.beginPath();
-    const eyeX=e.x+(player.x-e.x>0?2:-2);
-    const eyeY=e.y+(player.y-e.y>0?2:-2)*0.5;
-    ctx.arc(eyeX,eyeY,1.5,0,Math.PI*2);
-    ctx.fill();
-
-    // Smart enemy crown
-    if(e.smart&&!frozen) {
-      ctx.strokeStyle='#ffdd00';
-      ctx.lineWidth=1;
-      ctx.shadowColor='#ffdd00';
-      ctx.shadowBlur=4;
-      ctx.beginPath();
-      ctx.arc(e.x,e.y,enemyRadius+3,Math.PI+0.3,Math.PI*2-0.3);
-      ctx.stroke();
-      ctx.shadowBlur=0;
-    }
-  });
-  ctx.shadowBlur=0;
-}
-
-function drawPowerups() {
-  const t=Date.now()/1000;
-  powerups.forEach(p=>{
-    if(p.collected) return;
-    // fog check
-    if(fogOfWar&&revealedCells&&!revealedCells[p.cy][p.cx]) return;
-
-    const pulse=Math.sin(p.pulse)*0.25+0.75;
-    const r=size*0.28*pulse;
-    const x=p.x, y=p.y;
-
-    ctx.shadowColor=p.type.color;
-    ctx.shadowBlur=16*pulse;
-    ctx.strokeStyle=p.type.color;
-    ctx.lineWidth=1.5;
-    ctx.beginPath();
-    ctx.arc(x,y,r*1.3,0,Math.PI*2);
-    ctx.stroke();
-
-    ctx.fillStyle=p.type.color+'44';
-    ctx.beginPath();
-    ctx.arc(x,y,r,0,Math.PI*2);
-    ctx.fill();
-
-    ctx.shadowBlur=0;
-    ctx.fillStyle='white';
-    ctx.font=`${Math.floor(r*1.2)}px Arial`;
-    ctx.textAlign='center';
-    ctx.textBaseline='middle';
-    ctx.fillText(p.type.glyph,x,y+1);
-  });
-  ctx.shadowBlur=0;
-}
-
-function drawFog(colors) {
-  if(!fogOfWar||!revealedCells) return;
-  for(let r=0;r<rows;r++) {
-    for(let c=0;c<cols;c++) {
-      if(!revealedCells[r][c]) {
-        ctx.fillStyle=colors.bg+'ee';
-        ctx.fillRect(c*size,r*size,size,size);
-      }
-    }
-  }
-}
-
-function draw() {
-  const colors=getLevelColors();
-  ctx.fillStyle=colors.bg;
-  ctx.fillRect(0,0,canvas.width,canvas.height);
-
-  if(!maze) return;
-
-  // Grid dots
-  ctx.fillStyle='rgba(255,255,255,0.04)';
-  for(let r=0;r<=rows;r++) for(let c=0;c<=cols;c++) {
-    ctx.fillRect(c*size-0.5,r*size-0.5,1,1);
-  }
-
-  drawMaze(colors);
-  drawEnd(colors);
-  drawPowerups();
-  drawTrail();
-  drawPlayer();
-  drawEnemies();
-  drawParticles();
-  drawFog(colors);
-}
-
-// ─── LOOP ────────────────────────────────────
-function loop(t) {
-  const delta=(t-lastTime)/1000;
-  lastTime=t;
-  update(delta);
-  draw();
-  animFrame=requestAnimationFrame(loop);
-}
-
-// ─── LEVEL CONFIG ────────────────────────────
-function getLevelConfig(lvl) {
-  const mazeSize = Math.min(BASE_ROWS+Math.floor(lvl/2)*2, 33);
-  const enemyCount = Math.min(2+Math.floor(lvl*0.8), 10);
-  const smartEnemies = Math.floor(lvl*0.4);
-  const hasFog = lvl>=5;
-  return { mazeSize, enemyCount, smartEnemies, hasFog };
-}
-
-// ─── START GAME ──────────────────────────────
-function startGame() {
-  currentLevel=1;
-  score=0;
-  lives=3;
-  timerSeconds=0;
-  initLevel();
-}
-
-function nextLevel() {
-  currentLevel++;
-  score+=Math.max(0, 1000 - timerSeconds*5);
-  initLevel();
-}
-
-function initLevel() {
-  // Resume audio context
-  getAudio();
-  if(audioCtx&&audioCtx.state==='suspended') audioCtx.resume();
-
-  const cfg=getLevelConfig(currentLevel);
-  rows=cfg.mazeSize; cols=cfg.mazeSize;
-  fogOfWar=cfg.hasFog;
-
-  resizeCanvas();
-
-  maze=generateMaze(rows,cols);
-  player={x:size/2,y:size/2};
-  endCell={x:cols-1,y:rows-1};
-  playerTrail=[];
-  particles=[];
-
-  // Revealed cells for fog
-  revealedCells=fogOfWar
-    ? Array.from({length:rows},()=>new Array(cols).fill(false))
-    : null;
-  revealAround(player.x,player.y);
-
-  // Shield
-  shieldActive=false;
-  shieldCooldown=false;
-  shieldCooldownTimer=0;
-  shieldRemaining=0;
-  speedBoost=0;
-  freezeEnemies=0;
-
-  // Enemies
-  enemies=[];
-  for(let i=0;i<cfg.enemyCount;i++) {
-    let cx,cy;
-    do {
-      cx=Math.floor(Math.random()*cols);
-      cy=Math.floor(Math.random()*rows);
-    } while(cx<3&&cy<3); // not near start
-    const smart=i<cfg.smartEnemies;
-    enemies.push({cx,cy,x:(cx+0.5)*size,y:(cy+0.5)*size,path:[],pathTimer:0,smart});
-  }
-
-  spawnPowerups();
-
-  // Timer
-  clearInterval(timerInterval);
-  if(currentLevel===1) timerSeconds=0;
-  timerInterval=setInterval(()=>{ timerSeconds++; }, 1000);
-
-  // Show game screen
-  document.getElementById('menu').classList.remove('active');
-  document.getElementById('victory').classList.remove('active');
-  document.getElementById('gameover').classList.remove('active');
-  document.getElementById('game').classList.add('active');
-
-  running=true;
-  updateHUD();
-}
-
-// ─── WIN / LOSE ──────────────────────────────
-function checkWin() {
-  const ex=(endCell.x+0.5)*size, ey=(endCell.y+0.5)*size;
-  if(Math.hypot(player.x-ex,player.y-ey)<playerRadius+8) {
-    running=false;
-    clearInterval(timerInterval);
-    sfxWin();
-    spawnParticles(player.x,player.y,'#00ff88',30,150,1);
-
-    // Bonus
-    const bonus=Math.max(0,1000-timerSeconds*5);
-    score+=bonus+currentLevel*100;
-
-    const mins=Math.floor(timerSeconds/60);
-    const secs=timerSeconds%60;
-    const timeStr=`${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}`;
-
-    // Check record
-    let isRecord=false;
-    if(timerSeconds<bestTimeSeconds) { bestTimeSeconds=timerSeconds; isRecord=true; }
-    if(currentLevel>savedMaxLevel) savedMaxLevel=currentLevel;
-    saveRecords();
-
-    document.getElementById('finalTime').textContent=timeStr;
-    document.getElementById('finalScore').textContent=String(score).padStart(5,'0');
-    document.getElementById('finalLevel').textContent=String(currentLevel).padStart(2,'0');
-    document.getElementById('newRecord').classList.toggle('hidden',!isRecord);
-
-    setTimeout(()=>{
-      document.getElementById('game').classList.remove('active');
-      document.getElementById('victory').classList.add('active');
-    }, 800);
-  }
-}
-
-function triggerGameOver() {
-  document.getElementById('goLevel').textContent=String(currentLevel).padStart(2,'0');
-  document.getElementById('goScore').textContent=String(score).padStart(5,'0');
-  document.getElementById('game').classList.remove('active');
-  document.getElementById('gameover').classList.add('active');
-}
-
-function goMenu() {
-  running=false;
-  clearInterval(timerInterval);
-  cancelAnimationFrame(animFrame);
-  maze=null;
-  document.getElementById('game').classList.remove('active');
-  document.getElementById('victory').classList.remove('active');
-  document.getElementById('gameover').classList.remove('active');
-  document.getElementById('menu').classList.add('active');
-  updateMenuStats();
-  startMenuAnimation();
-}
-
-// ─── RECORDS ─────────────────────────────────
-function saveRecords() {
-  try {
-    localStorage.setItem('nexus_best', bestTimeSeconds===Infinity?'':bestTimeSeconds);
-    localStorage.setItem('nexus_lvl', savedMaxLevel);
-  } catch(e){}
-}
-function loadRecords() {
-  try {
-    const b=localStorage.getItem('nexus_best');
-    bestTimeSeconds=b&&b!==''?parseInt(b):Infinity;
-    savedMaxLevel=parseInt(localStorage.getItem('nexus_lvl')||'1');
-  } catch(e){}
-}
-function updateMenuStats() {
-  if(bestTimeSeconds!==Infinity) {
-    const m=Math.floor(bestTimeSeconds/60), s=bestTimeSeconds%60;
-    document.getElementById('bestTime').textContent=`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  }
-  document.getElementById('maxLevel').textContent=String(savedMaxLevel).padStart(2,'0');
-}
-
-// ─── MENU BACKGROUND ANIMATION ───────────────
-let bgAnimFrame;
-function startMenuAnimation() {
-  const bgCanvas=document.getElementById('bgCanvas');
-  if(!bgCanvas) return;
-  const bgCtx=bgCanvas.getContext('2d');
-  cancelAnimationFrame(bgAnimFrame);
-
-  const nodes=[];
-  function resizeBg() {
-    bgCanvas.width=window.innerWidth;
-    bgCanvas.height=window.innerHeight;
-  }
-  resizeBg();
-  window.addEventListener('resize',resizeBg);
-
-  // Floating nodes
-  for(let i=0;i<60;i++) nodes.push({
-    x:Math.random()*bgCanvas.width,
-    y:Math.random()*bgCanvas.height,
-    vx:(Math.random()-0.5)*15,
-    vy:(Math.random()-0.5)*15,
-    r:Math.random()*2+0.5,
-    color:Math.random()<0.5?'#00f5ff':'#ff00aa'
-  });
-
-  function animBg(t) {
-    bgAnimFrame=requestAnimationFrame(animBg);
-    bgCtx.fillStyle='rgba(5,8,16,0.12)';
-    bgCtx.fillRect(0,0,bgCanvas.width,bgCanvas.height);
-
-    nodes.forEach(n=>{
-      n.x+=n.vx*(1/60); n.y+=n.vy*(1/60);
-      if(n.x<0||n.x>bgCanvas.width) n.vx*=-1;
-      if(n.y<0||n.y>bgCanvas.height) n.vy*=-1;
-    });
-
-    // Draw connections
-    bgCtx.lineWidth=0.4;
-    for(let i=0;i<nodes.length;i++) {
-      for(let j=i+1;j<nodes.length;j++) {
-        const d=Math.hypot(nodes[i].x-nodes[j].x,nodes[i].y-nodes[j].y);
-        if(d<120) {
-          bgCtx.globalAlpha=(1-d/120)*0.25;
-          bgCtx.strokeStyle=nodes[i].color;
-          bgCtx.beginPath();
-          bgCtx.moveTo(nodes[i].x,nodes[i].y);
-          bgCtx.lineTo(nodes[j].x,nodes[j].y);
-          bgCtx.stroke();
-        }
-      }
-    }
-
-    nodes.forEach(n=>{
-      bgCtx.globalAlpha=0.8;
-      bgCtx.fillStyle=n.color;
-      bgCtx.shadowColor=n.color;
-      bgCtx.shadowBlur=8;
-      bgCtx.beginPath();
-      bgCtx.arc(n.x,n.y,n.r,0,Math.PI*2);
-      bgCtx.fill();
-    });
-    bgCtx.globalAlpha=1;
-    bgCtx.shadowBlur=0;
-  }
-  animBg(0);
-}
-
-// ─── INIT ────────────────────────────────────
-updateMenuStats();
-startMenuAnimation();
-lastTime=performance.now();
-requestAnimationFrame(t=>{
-  lastTime=t;
-  animFrame=requestAnimationFrame(loop);
-});
+ 
