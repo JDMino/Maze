@@ -33,6 +33,28 @@
         <span class="stat-value" id="maxLevel">01</span>
       </div>
     </div>
+
+    <div class="quality-selector">
+      <div class="quality-label">// GRAPHICS //</div>
+      <div class="quality-options">
+        <button class="quality-btn" data-q="low"    onclick="setQuality('low')">
+          <span class="q-icon">▪</span>
+          <span class="q-name">LOW</span>
+          <span class="q-desc">Max performance</span>
+        </button>
+        <button class="quality-btn" data-q="medium" onclick="setQuality('medium')">
+          <span class="q-icon">▪▪</span>
+          <span class="q-name">MED</span>
+          <span class="q-desc">Balanced</span>
+        </button>
+        <button class="quality-btn" data-q="high"   onclick="setQuality('high')">
+          <span class="q-icon">▪▪▪</span>
+          <span class="q-name">HIGH</span>
+          <span class="q-desc">Full effects</span>
+        </button>
+      </div>
+    </div>
+
     <button class="btn-primary" onclick="startGame()">
       <span class="btn-icon">▶</span> INITIALIZE
     </button>
