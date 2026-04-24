@@ -2,40 +2,138 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Laberinto IA Responsive</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NEXUS MAZE — Cyberpunk Labyrinth</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<div id="menu" class="active">
-    <h1>Laberinto</h1>
-    <button onclick="startGame()">Play</button>
+<!-- MENU -->
+<div id="menu" class="screen active">
+  <div class="scanlines"></div>
+  <div class="menu-bg">
+    <canvas id="bgCanvas"></canvas>
+  </div>
+  <div class="menu-content">
+    <div class="logo-wrapper">
+      <div class="logo-glitch" data-text="NEXUS">NEXUS</div>
+      <div class="logo-sub">MAZE</div>
+      <div class="logo-tagline">// INFILTRATE. SURVIVE. ESCAPE. //</div>
+    </div>
+    <div class="menu-stats">
+      <div class="stat-box">
+        <span class="stat-label">BEST TIME</span>
+        <span class="stat-value" id="bestTime">--:--</span>
+      </div>
+      <div class="stat-box">
+        <span class="stat-label">MAX LEVEL</span>
+        <span class="stat-value" id="maxLevel">01</span>
+      </div>
+    </div>
+    <button class="btn-primary" onclick="startGame()">
+      <span class="btn-icon">▶</span> INITIALIZE
+    </button>
+    <div class="menu-controls">
+      <div class="ctrl-item"><kbd>W A S D</kbd> or <kbd>↑ ← ↓ →</kbd> Move</div>
+      <div class="ctrl-item"><kbd>Space</kbd> Activate Shield</div>
+    </div>
+  </div>
 </div>
 
-<div id="game">
-    <div id="topBar">
-        <div>Tiempo: <span id="timer">0</span>s</div>
-        <button onclick="goMenu()">Menú</button>
+<!-- GAME -->
+<div id="game" class="screen">
+  <div class="scanlines"></div>
+  <div id="hud">
+    <div class="hud-left">
+      <div class="hud-item">
+        <span class="hud-label">LEVEL</span>
+        <span class="hud-value" id="levelDisplay">01</span>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">TIME</span>
+        <span class="hud-value mono" id="timer">00:00</span>
+      </div>
     </div>
-    <canvas id="canvas"></canvas>
-
-    <div id="touchControls">
-        <div id="touchpad">
-            <div id="touchIndicator"></div>
+    <div class="hud-center">
+      <div class="lives-container" id="livesDisplay"></div>
+    </div>
+    <div class="hud-right">
+      <div class="hud-item">
+        <span class="hud-label">SHIELD</span>
+        <div class="shield-bar-wrap">
+          <div class="shield-bar" id="shieldBar"></div>
         </div>
+      </div>
+      <div class="hud-item">
+        <span class="hud-label">SCORE</span>
+        <span class="hud-value mono" id="scoreDisplay">00000</span>
+      </div>
     </div>
+  </div>
+
+  <div id="canvasWrap">
+    <canvas id="canvas"></canvas>
+    <div id="powerupToast" class="toast"></div>
+  </div>
+
+  <div id="touchControls">
+    <button class="touch-btn" id="btnMenu" onclick="goMenu()">✕</button>
+    <div id="touchpad">
+      <div id="touchRing"></div>
+      <div id="touchIndicator"></div>
+    </div>
+    <button class="touch-btn" id="btnShield" onclick="activateShield()">🛡</button>
+  </div>
 </div>
 
-<div id="victory">
-    <h1>¡Ganaste!</h1>
-    <p>Tiempo: <span id="finalTime"></span>s</p>
-    <button onclick="goMenu()">Volver al menú</button>
+<!-- VICTORY -->
+<div id="victory" class="screen overlay-screen">
+  <div class="scanlines"></div>
+  <div class="overlay-content">
+    <div class="overlay-title win">SYSTEM BREACH</div>
+    <div class="overlay-sub">LEVEL CLEARED</div>
+    <div class="result-grid">
+      <div class="result-item">
+        <span class="result-label">TIME</span>
+        <span class="result-value" id="finalTime">--:--</span>
+      </div>
+      <div class="result-item">
+        <span class="result-label">SCORE</span>
+        <span class="result-value" id="finalScore">00000</span>
+      </div>
+      <div class="result-item">
+        <span class="result-label">LEVEL</span>
+        <span class="result-value" id="finalLevel">01</span>
+      </div>
+    </div>
+    <div id="newRecord" class="new-record hidden">⚡ NEW RECORD ⚡</div>
+    <button class="btn-primary" onclick="nextLevel()">NEXT LEVEL ▶</button>
+    <button class="btn-secondary" onclick="goMenu()">MAIN MENU</button>
+  </div>
 </div>
 
-<div id="gameover">
-    <h1>Game Over</h1>
-    <button onclick="goMenu()">Volver al menú</button>
+<!-- GAME OVER -->
+<div id="gameover" class="screen overlay-screen">
+  <div class="scanlines"></div>
+  <div class="overlay-content">
+    <div class="overlay-title fail">CONNECTION<br>LOST</div>
+    <div class="overlay-sub">AGENT TERMINATED</div>
+    <div class="result-grid">
+      <div class="result-item">
+        <span class="result-label">REACHED LVL</span>
+        <span class="result-value" id="goLevel">01</span>
+      </div>
+      <div class="result-item">
+        <span class="result-label">SCORE</span>
+        <span class="result-value" id="goScore">00000</span>
+      </div>
+    </div>
+    <button class="btn-primary" onclick="startGame()">RETRY</button>
+    <button class="btn-secondary" onclick="goMenu()">MAIN MENU</button>
+  </div>
 </div>
 
 <script src="game.js"></script>
