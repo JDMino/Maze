@@ -123,6 +123,15 @@ const SHIELD_BLINK_DURATION = 2.0;
 const SHIELD_COOLDOWN = 5.0;
 let shieldRemaining = 0;
 
+// Hunter enemies (desde nivel 3): deambulan al azar y sólo persiguen
+// cuando ven al jugador delante suyo (campo de visión + línea de visión
+// sin paredes de por medio). Si dejan de verte por HUNTER_LOSE_SIGHT_TIME
+// segundos, abandonan la persecución y vuelven a deambular.
+const HUNTER_VISION_CELLS = 6;                 // alcance de visión, en celdas
+const HUNTER_FOV_HALF_DEG = 50;                // medio ángulo del cono de visión (100° total)
+const HUNTER_FOV_COS = Math.cos(HUNTER_FOV_HALF_DEG * Math.PI / 180);
+const HUNTER_LOSE_SIGHT_TIME = 4.0;            // segundos sin verte antes de abandonar
+
 // Power-up effects
 let speedBoost = 0;
 let freezeEnemies = 0;
@@ -362,6 +371,61 @@ function bfsPath(maze, startX, startY, endX, endY, r, c) {
     }
   }
   return [];
+}
+
+// ─── HUNTER PERCEPTION (línea de visión + campo de visión) ──
+// Recorre el segmento enemigo→jugador en pasos pequeños y, cada vez que
+// cruza a una celda distinta, verifica que la pared entre ambas celdas
+// esté abierta. Si en algún punto hay una pared bloqueando, no hay
+// línea de visión.
+function hasLineOfSight(x1, y1, x2, y2) {
+  if (!maze) return false;
+  const dist = Math.hypot(x2 - x1, y2 - y1);
+  if (dist < 1) return true;
+  const step = Math.max(2, size * 0.2);
+  const steps = Math.ceil(dist / step);
+  let cx = Math.floor(x1 / size), cy = Math.floor(y1 / size);
+  if (cx < 0 || cy < 0 || cx >= cols || cy >= rows) return false;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const px = x1 + (x2 - x1) * t;
+    const py = y1 + (y2 - y1) * t;
+    const ncx = Math.floor(px / size), ncy = Math.floor(py / size);
+    if (ncx < 0 || ncy < 0 || ncx >= cols || ncy >= rows) return false;
+    if (ncx !== cx || ncy !== cy) {
+      if (ncx === cx + 1 && ncy === cy) { if (maze[cy][cx].walls[1]) return false; }
+      else if (ncx === cx - 1 && ncy === cy) { if (maze[cy][cx].walls[3]) return false; }
+      else if (ncy === cy + 1 && ncx === cx) { if (maze[cy][cx].walls[2]) return false; }
+      else if (ncy === cy - 1 && ncx === cx) { if (maze[cy][cx].walls[0]) return false; }
+      else {
+        // Salto diagonal entre celdas (paso grande cruzó una esquina):
+        // se considera bloqueado sólo si ambas paredes adyacentes lo están,
+        // ya que si alguna está abierta se puede "ver" a través de esa esquina.
+        const dx = ncx - cx, dy = ncy - cy;
+        const wallH = dx > 0 ? maze[cy][cx].walls[1] : maze[cy][cx].walls[3];
+        const wallV = dy > 0 ? maze[cy][cx].walls[2] : maze[cy][cx].walls[0];
+        if (wallH && wallV) return false;
+      }
+      cx = ncx; cy = ncy;
+    }
+  }
+  return true;
+}
+
+// Un hunter "ve" al jugador si está dentro del alcance, dentro de su cono
+// de visión frontal (según hacia dónde se está moviendo) y hay línea de
+// visión directa (sin paredes de por medio).
+function canHunterSeePlayer(e) {
+  const dx = player.x - e.x, dy = player.y - e.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > size * HUNTER_VISION_CELLS) return false;
+  if (dist > 1) {
+    const nx = dx / dist, ny = dy / dist;
+    const fx = e.facingX || 1, fy = e.facingY || 0;
+    const dot = fx * nx + fy * ny;
+    if (dot < HUNTER_FOV_COS) return false;
+  }
+  return hasLineOfSight(e.x, e.y, player.x, player.y);
 }
 
 // ─── COLLISION ───────────────────────────────
@@ -640,18 +704,42 @@ function update(delta) {
   enemies.forEach(e=>{
     if(freezeEnemies>0) return;
 
+    // Percepción del hunter: se evalúa TODOS los frames (no sólo cuando
+    // toca recalcular camino), porque tanto ver al jugador como el conteo
+    // de los 4 segundos sin verlo dependen del tiempo real transcurrido.
+    if (e.hunter) {
+      const canSee = canHunterSeePlayer(e);
+      if (canSee) {
+        e.lostSightTimer = 0;
+        if (e.huntState !== 'chase') {
+          // Recién te detecta: pasa a perseguir y fuerza recálculo de ruta ya.
+          e.huntState = 'chase';
+          e.path = []; e.pathTimer = 0;
+        }
+      } else if (e.huntState === 'chase') {
+        e.lostSightTimer += delta;
+        if (e.lostSightTimer >= HUNTER_LOSE_SIGHT_TIME) {
+          // Te perdió de vista por suficiente tiempo: abandona la persecución.
+          e.huntState = 'wander';
+          e.path = []; e.pathTimer = 0;
+        }
+      }
+    }
+
     if(!e.path||e.path.length===0||e.pathTimer<=0) {
       const pc=Math.max(0,Math.min(cols-1,Math.floor(player.x/size)));
       const pr=Math.max(0,Math.min(rows-1,Math.floor(player.y/size)));
       const ec=Math.max(0,Math.min(cols-1,Math.floor(e.x/size)));
       const er=Math.max(0,Math.min(rows-1,Math.floor(e.y/size)));
-      if(e.smart) {
+      const chasing = e.hunter && e.huntState==='chase';
+      if(chasing) {
         e.path=bfsPath(maze,ec,er,pc,pr,rows,cols);
+        e.pathTimer=0.5+Math.random()*0.3; // recalcula más seguido mientras persigue
       } else {
         const nb=getNeighbors(maze,ec,er);
         e.path=nb.length?[nb[Math.floor(Math.random()*nb.length)]]:[];
+        e.pathTimer=0.8+Math.random()*0.8;
       }
-      e.pathTimer=0.8+Math.random()*0.8;
     }
     e.pathTimer-=delta;
 
@@ -666,6 +754,9 @@ function update(delta) {
       } else {
         const mvx=ddx/dist*enemySpeed, mvy=ddy/dist*enemySpeed;
         moveEntity(e,mvx,mvy,delta,enemyRadius);
+        // El hunter actualiza hacia dónde "mira" según hacia dónde se mueve,
+        // eso define su cono de visión frontal.
+        if (e.hunter) { e.facingX = ddx/dist; e.facingY = ddy/dist; }
       }
     }
 
@@ -892,15 +983,21 @@ function drawEnemies() {
   const t=Date.now()/1000;
   enemies.forEach((e,i)=>{
     const frozen=freezeEnemies>0;
-    const color=frozen?'#00aaff':(e.smart?'#ffaa00':'#ff4400');
-    const glowColor=frozen?'#00aaff':(e.smart?'#ff6600':'#ff2200');
+    const hunterChasing = e.hunter && e.huntState==='chase';
+    let color, glowColor;
+    if (frozen) { color='#00aaff'; glowColor='#00aaff'; }
+    else if (e.hunter) {
+      color = hunterChasing ? '#ff0044' : '#aa44ff';
+      glowColor = hunterChasing ? '#ff0066' : '#8822ff';
+    }
+    else { color='#ff4400'; glowColor='#ff2200'; }
 
     if(GFX.entityGlow) { ctx.shadowColor=glowColor; ctx.shadowBlur=frozen?8:12; }
 
     if(GFX.gradients) {
       const pulse=Math.sin(t*4+i)*0.15+0.85;
       const grad=ctx.createRadialGradient(e.x-1,e.y-2,0,e.x,e.y,enemyRadius);
-      grad.addColorStop(0,frozen?'#44ccff':e.smart?'#ffdd44':'#ff8866');
+      grad.addColorStop(0,frozen?'#44ccff':e.hunter?(hunterChasing?'#ff6688':'#cc88ff'):'#ff8866');
       grad.addColorStop(1,color);
       ctx.fillStyle=grad;
       ctx.beginPath();
@@ -921,15 +1018,14 @@ function drawEnemies() {
     ctx.arc(eyeX,eyeY,1.5,0,Math.PI*2);
     ctx.fill();
 
-    // Smart crown — only in medium/high
-    if(e.smart&&!frozen&&GFX.entityGlow) {
-      ctx.strokeStyle='#ffdd00';
-      ctx.lineWidth=1;
-      ctx.shadowColor='#ffdd00';
-      ctx.shadowBlur=4;
-      ctx.beginPath();
-      ctx.arc(e.x,e.y,enemyRadius+3,Math.PI+0.3,Math.PI*2-0.3);
-      ctx.stroke();
+    // Hunter: ícono de alerta "!" mientras está persiguiendo al jugador
+    if(hunterChasing&&!frozen) {
+      ctx.fillStyle='#ff0044';
+      if(GFX.entityGlow) { ctx.shadowColor='#ff0044'; ctx.shadowBlur=6; }
+      ctx.font=`bold ${Math.max(8,Math.floor(enemyRadius*1.6))}px Arial`;
+      ctx.textAlign='center';
+      ctx.textBaseline='bottom';
+      ctx.fillText('!',e.x,e.y-enemyRadius-3);
       ctx.shadowBlur=0;
     }
   });
@@ -1028,9 +1124,13 @@ function loop(t) {
 function getLevelConfig(lvl) {
   const mazeSize = Math.min(BASE_ROWS+Math.floor(lvl/2)*2, 33);
   const enemyCount = Math.min(2+Math.floor(lvl*0.8), 10);
-  const smartEnemies = Math.floor(lvl*0.4);
+  // Desde el nivel 3 aparecen los "hunters": arrancan deambulando al azar
+  // y persiguen sólo cuando te ven. 1 desde nivel 3, sumando uno más cada
+  // 2 niveles, hasta un máximo de 5 (absorbe la curva de dificultad que
+  // antes tenía el enemigo "smart", ya eliminado).
+  const hunterEnemies = lvl>=3 ? Math.min(1+Math.floor((lvl-3)/2), 5) : 0;
   const hasFog = lvl>=5;
-  return { mazeSize, enemyCount, smartEnemies, hasFog };
+  return { mazeSize, enemyCount, hunterEnemies, hasFog };
 }
 
 // ─── START GAME ──────────────────────────────
@@ -1085,6 +1185,8 @@ function initLevel() {
 
   // Enemies — spawn at cell centers, well away from player start
   enemies=[];
+  const hunterCount = Math.min(cfg.hunterEnemies, cfg.enemyCount);
+  const HUNTER_DIRS = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}];
   for(let i=0;i<cfg.enemyCount;i++) {
     let cx,cy;
     let attempts=0;
@@ -1093,14 +1195,23 @@ function initLevel() {
       cy=Math.floor(Math.random()*rows);
       attempts++;
     } while(attempts<200 && (cx+cy)<6); // Manhattan dist from (0,0) >= 6
-    const smart=i<cfg.smartEnemies;
+    const hunter = i<hunterCount;
     // Snap pixel position to exact cell center using current size
-    enemies.push({
+    const enemy = {
       cx, cy,
       x:(cx+0.5)*size,
       y:(cy+0.5)*size,
-      path:[], pathTimer:0, smart
-    });
+      path:[], pathTimer:0, hunter
+    };
+    if (hunter) {
+      // Arranca deambulando, sin haber visto al jugador todavía.
+      const dir = HUNTER_DIRS[Math.floor(Math.random()*HUNTER_DIRS.length)];
+      enemy.facingX = dir.x;
+      enemy.facingY = dir.y;
+      enemy.huntState = 'wander';
+      enemy.lostSightTimer = HUNTER_LOSE_SIGHT_TIME;
+    }
+    enemies.push(enemy);
   }
 
   spawnPowerups();
