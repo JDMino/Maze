@@ -78,6 +78,10 @@
         <span class="hud-label">TIME</span>
         <span class="hud-value mono" id="timer">00:00</span>
       </div>
+      <div class="hud-item" id="keyHudItem" style="display:none;">
+        <span class="hud-label">LLAVE</span>
+        <span class="hud-value" id="keyDisplay">🔒</span>
+      </div>
     </div>
     <div class="hud-center">
       <div class="lives-container" id="livesDisplay"></div>
@@ -130,8 +134,13 @@
         <span class="result-label">LEVEL</span>
         <span class="result-value" id="finalLevel">01</span>
       </div>
+      <div class="result-item">
+        <span class="result-label">RACHA</span>
+        <span class="result-value" id="finalStreak">00</span>
+      </div>
     </div>
     <div id="newRecord" class="new-record hidden">⚡ NEW RECORD ⚡</div>
+    <div id="streakBonusNote" class="new-record hidden">🔥 BONUS DE RACHA 🔥</div>
     <button class="btn-primary" onclick="nextLevel()">NEXT LEVEL ▶</button>
     <button class="btn-secondary" onclick="goMenu()">MAIN MENU</button>
   </div>

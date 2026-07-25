@@ -138,6 +138,39 @@ let freezeEnemies = 0;
 let fogOfWar = false;
 let fogRadius = 0;
 
+// Señuelo: distrae a los hunters que te estén persiguiendo
+let decoyActive = false;
+let decoyTimer = 0;
+let decoyX = 0, decoyY = 0;
+const DECOY_DURATION = 4.0;
+
+// Puntaje doble
+let doubleScoreTimer = 0;
+const DOUBLE_SCORE_DURATION = 8.0;
+
+// Visión de rayos X: revela el camino hacia la salida por unos segundos
+let xrayTimer = 0;
+let xrayPath = null;
+const XRAY_DURATION = 6.0;
+
+// Trampas, teletransportadores y llave (aparecen desde ciertos niveles)
+let traps = [];
+let teleporters = [];
+let keyItem = null;
+let hasKey = true;              // true si el nivel no requiere llave, o ya se recolectó
+let trapInvulnTimer = 0;        // breve invulnerabilidad tras pisar una trampa
+let teleportCooldownTimer = 0;  // evita rebotar de un teleportador al otro sin parar
+let lockedToastTimer = 0;       // rate-limit del aviso "necesitás la llave"
+const TELEPORTER_COLORS = ['#00ffea', '#ff00ea', '#eaff00'];
+
+// Racha de niveles completados sin perder ninguna vida
+let winStreak = 0;
+let levelHitOccurred = false;
+
+// Se actualiza cada frame en update(): usado por drawEnemies() para pintar
+// a las estatuas de otro color mientras el jugador está en movimiento.
+let playerMoved = false;
+
 // Touch
 let touchActive = false;
 let touchDx = 0, touchDy = 0;
@@ -258,6 +291,16 @@ function resizeCanvas() {
       p.x = (p.cx + 0.5) * size;
       p.y = (p.cy + 0.5) * size;
     });
+
+    // Trampas, teletransportadores y llave también guardan cx/cy: se
+    // recalculan directo desde ahí, igual que los powerups.
+    traps.forEach(t => { t.x=(t.cx+0.5)*size; t.y=(t.cy+0.5)*size; });
+    teleporters.forEach(tp => { tp.x=(tp.cx+0.5)*size; tp.y=(tp.cy+0.5)*size; });
+    if (keyItem) { keyItem.x=(keyItem.cx+0.5)*size; keyItem.y=(keyItem.cy+0.5)*size; }
+
+    // El señuelo no tiene cx/cy propio (se dropea en una posición libre de
+    // píxeles, no en el centro de una celda), así que se reescala directo.
+    if (decoyActive) { decoyX *= scale; decoyY *= scale; }
 
     // El trail y las partículas quedan con posiciones "viejas" que ya no
     // tienen sentido visualmente tras el reescalado; se limpian.
@@ -551,10 +594,18 @@ function revealAround(px,py) {
 
 // ─── POWER-UPS ───────────────────────────────
 const POWERUP_TYPES = [
-  { id:'speed',  color:'#ffe600', glyph:'⚡', label:'SPEED BOOST',   duration:5 },
-  { id:'freeze', color:'#00aaff', glyph:'❄',  label:'FREEZE ENEMIES',duration:4 },
-  { id:'shield', color:'#00f5ff', glyph:'🛡', label:'SHIELD RESTORE',duration:0 },
+  { id:'speed',       color:'#ffe600', glyph:'⚡',  label:'SPEED BOOST',    duration:5 },
+  { id:'freeze',      color:'#00aaff', glyph:'❄',  label:'FREEZE ENEMIES', duration:4 },
+  { id:'shield',      color:'#00f5ff', glyph:'🛡',  label:'SHIELD RESTORE', duration:0 },
+  { id:'xray',        color:'#00ff88', glyph:'👁',  label:'VISIÓN RAYOS X', duration:XRAY_DURATION },
+  { id:'decoy',       color:'#ff66ff', glyph:'👥',  label:'SEÑUELO',        duration:DECOY_DURATION },
+  { id:'doublescore', color:'#ffaa00', glyph:'2×', label:'PUNTAJE DOBLE',  duration:DOUBLE_SCORE_DURATION },
 ];
+
+// Suma puntaje respetando el multiplicador de "puntaje doble" si está activo.
+function addScore(n) {
+  score += doubleScoreTimer > 0 ? Math.round(n * 2) : n;
+}
 
 function spawnPowerups() {
   powerups = [];
@@ -572,6 +623,47 @@ function spawnPowerups() {
       type, collected:false,
       pulse:Math.random()*Math.PI*2
     });
+  }
+}
+
+// ─── TRAMPAS / TELETRANSPORTADORES / LLAVE ───
+// Genera los hazards del mapa para el nivel actual. Se llama junto con
+// spawnPowerups() al iniciar cada nivel.
+function spawnHazards(cfg) {
+  traps = [];
+  teleporters = [];
+  keyItem = null;
+  hasKey = !cfg.needsKey;
+
+  const used = new Set();
+  const isFree = (cx,cy) => {
+    if(used.has(cy*cols+cx)) return false;
+    if((cx<2&&cy<2)||(cx>=cols-2&&cy>=rows-2)) return false; // lejos del inicio y la salida
+    return true;
+  };
+  const pickFreeCell = () => {
+    let cx,cy,attempts=0;
+    do { cx=Math.floor(Math.random()*cols); cy=Math.floor(Math.random()*rows); attempts++; }
+    while(!isFree(cx,cy) && attempts<300);
+    used.add(cy*cols+cx);
+    return {cx,cy};
+  };
+
+  for(let i=0;i<cfg.trapCount;i++) {
+    const {cx,cy}=pickFreeCell();
+    traps.push({ cx, cy, x:(cx+0.5)*size, y:(cy+0.5)*size });
+  }
+
+  for(let i=0;i<cfg.teleporterPairs;i++) {
+    const a=pickFreeCell(), b=pickFreeCell();
+    const color = TELEPORTER_COLORS[i % TELEPORTER_COLORS.length];
+    teleporters.push({ cx:a.cx, cy:a.cy, x:(a.cx+0.5)*size, y:(a.cy+0.5)*size, pairId:i, color });
+    teleporters.push({ cx:b.cx, cy:b.cy, x:(b.cx+0.5)*size, y:(b.cy+0.5)*size, pairId:i, color });
+  }
+
+  if(cfg.needsKey) {
+    const {cx,cy}=pickFreeCell();
+    keyItem = { cx, cy, x:(cx+0.5)*size, y:(cy+0.5)*size, collected:false };
   }
 }
 
@@ -614,6 +706,17 @@ function updateHUD() {
   } else {
     sb.style.background='#00f5ff';
     sb.style.width='100%';
+  }
+
+  // Llave (sólo se muestra en niveles que la requieren)
+  const keyHud=document.getElementById('keyHudItem');
+  if(keyHud) {
+    if(!keyItem) {
+      keyHud.style.display='none';
+    } else {
+      keyHud.style.display='flex';
+      document.getElementById('keyDisplay').textContent = hasKey ? '🔓' : '🔒';
+    }
   }
 }
 
@@ -681,6 +784,18 @@ function update(delta) {
   // Speed / freeze timers
   if(speedBoost>0) speedBoost-=delta;
   if(freezeEnemies>0) freezeEnemies-=delta;
+  if(doubleScoreTimer>0) doubleScoreTimer-=delta;
+  if(xrayTimer>0) xrayTimer-=delta;
+  if(decoyActive) {
+    decoyTimer-=delta;
+    if(decoyTimer<=0) decoyActive=false;
+  }
+  if(trapInvulnTimer>0) trapInvulnTimer-=delta;
+  if(teleportCooldownTimer>0) teleportCooldownTimer-=delta;
+  if(lockedToastTimer>0) lockedToastTimer-=delta;
+
+  // Guarda si el jugador se movió este frame: lo usan las estatuas (drawEnemies)
+  playerMoved = moved;
 
   // Powerup pulse & collect
   powerups.forEach(p=>{ p.pulse+=delta*3; });
@@ -690,13 +805,62 @@ function update(delta) {
     if(Math.hypot(player.x-p.x,player.y-p.y)<playerRadius+10) {
       p.collected=true;
       sfxCollect();
-      score+=200;
+      addScore(200);
       spawnParticles(p.x,p.y,p.type.color,16,100,0.7);
       showToast(p.type.glyph+' '+p.type.label);
       if(p.type.id==='speed') speedBoost=p.type.duration;
       else if(p.type.id==='freeze') freezeEnemies=p.type.duration;
       else if(p.type.id==='shield') { shieldActive=false; shieldCooldown=false; shieldCooldownTimer=0; shieldRemaining=SHIELD_MAX_DURATION; }
+      else if(p.type.id==='xray') {
+        xrayTimer=p.type.duration;
+        const pc=Math.max(0,Math.min(cols-1,Math.floor(player.x/size)));
+        const pr=Math.max(0,Math.min(rows-1,Math.floor(player.y/size)));
+        xrayPath=bfsPath(maze,pc,pr,endCell.x,endCell.y,rows,cols);
+      }
+      else if(p.type.id==='decoy') { decoyActive=true; decoyTimer=p.type.duration; decoyX=player.x; decoyY=player.y; }
+      else if(p.type.id==='doublescore') { doubleScoreTimer=p.type.duration; }
     }
+  }
+
+  // Trampas: pierden una vida si las tocás, con breve invulnerabilidad para
+  // no perder varias vidas de golpe si te quedás parado sobre una.
+  if(trapInvulnTimer<=0 && !shieldActive && !shieldBlinking) {
+    for(const trap of traps) {
+      if(Math.hypot(player.x-trap.x,player.y-trap.y)<playerRadius+8) {
+        trapInvulnTimer=1.2;
+        spawnParticles(trap.x,trap.y,'#ff2244',18,110,0.6);
+        handleDeath();
+        break;
+      }
+    }
+  }
+
+  // Teletransportadores: te mandan al par vinculado, con cooldown para que
+  // no rebotes instantáneamente de un lado al otro.
+  if(teleportCooldownTimer<=0) {
+    for(const tp of teleporters) {
+      if(Math.hypot(player.x-tp.x,player.y-tp.y)<playerRadius+8) {
+        const dest=teleporters.find(o=>o.pairId===tp.pairId && o!==tp);
+        if(dest) {
+          spawnParticles(player.x,player.y,tp.color,16,90,0.5);
+          player.x=dest.x; player.y=dest.y;
+          spawnParticles(player.x,player.y,tp.color,16,90,0.5);
+          teleportCooldownTimer=1.0;
+          playerTrail=[];
+        }
+        break;
+      }
+    }
+  }
+
+  // Llave
+  if(keyItem && !keyItem.collected && Math.hypot(player.x-keyItem.x,player.y-keyItem.y)<playerRadius+10) {
+    keyItem.collected=true;
+    hasKey=true;
+    sfxCollect();
+    addScore(100);
+    spawnParticles(keyItem.x,keyItem.y,'#ffe600',18,100,0.6);
+    showToast('🔑 LLAVE OBTENIDA');
   }
 
   // Enemies
@@ -704,59 +868,106 @@ function update(delta) {
   enemies.forEach(e=>{
     if(freezeEnemies>0) return;
 
-    // Percepción del hunter: se evalúa TODOS los frames (no sólo cuando
-    // toca recalcular camino), porque tanto ver al jugador como el conteo
-    // de los 4 segundos sin verlo dependen del tiempo real transcurrido.
-    if (e.hunter) {
-      const canSee = canHunterSeePlayer(e);
-      if (canSee) {
-        e.lostSightTimer = 0;
-        if (e.huntState !== 'chase') {
-          // Recién te detecta: pasa a perseguir y fuerza recálculo de ruta ya.
-          e.huntState = 'chase';
-          e.path = []; e.pathTimer = 0;
-        }
-      } else if (e.huntState === 'chase') {
-        e.lostSightTimer += delta;
-        if (e.lostSightTimer >= HUNTER_LOSE_SIGHT_TIME) {
-          // Te perdió de vista por suficiente tiempo: abandona la persecución.
-          e.huntState = 'wander';
-          e.path = []; e.pathTimer = 0;
-        }
-      }
-    }
-
-    if(!e.path||e.path.length===0||e.pathTimer<=0) {
-      const pc=Math.max(0,Math.min(cols-1,Math.floor(player.x/size)));
-      const pr=Math.max(0,Math.min(rows-1,Math.floor(player.y/size)));
-      const ec=Math.max(0,Math.min(cols-1,Math.floor(e.x/size)));
-      const er=Math.max(0,Math.min(rows-1,Math.floor(e.y/size)));
-      const chasing = e.hunter && e.huntState==='chase';
-      if(chasing) {
-        e.path=bfsPath(maze,ec,er,pc,pr,rows,cols);
-        e.pathTimer=0.5+Math.random()*0.3; // recalcula más seguido mientras persigue
-      } else {
-        const nb=getNeighbors(maze,ec,er);
-        e.path=nb.length?[nb[Math.floor(Math.random()*nb.length)]]:[];
-        e.pathTimer=0.8+Math.random()*0.8;
-      }
-    }
-    e.pathTimer-=delta;
-
-    if(e.path&&e.path.length>0) {
-      const next=e.path[0];
-      const tx=(next.x+0.5)*size, ty=(next.y+0.5)*size;
+    if (e.patrol) {
+      // Patrulla: recorre una ruta fija en ida y vuelta, sin perseguir jamás.
+      const target=e.patrolRoute[e.patrolIndex];
+      const tx=(target.x+0.5)*size, ty=(target.y+0.5)*size;
       const ddx=tx-e.x, ddy=ty-e.y;
       const dist=Math.hypot(ddx,ddy);
       if(dist<2) {
         e.x=tx; e.y=ty;
-        e.path.shift();
+        e.patrolIndex=(e.patrolIndex+1)%e.patrolRoute.length;
       } else {
-        const mvx=ddx/dist*enemySpeed, mvy=ddy/dist*enemySpeed;
-        moveEntity(e,mvx,mvy,delta,enemyRadius);
-        // El hunter actualiza hacia dónde "mira" según hacia dónde se mueve,
-        // eso define su cono de visión frontal.
-        if (e.hunter) { e.facingX = ddx/dist; e.facingY = ddy/dist; }
+        const pSpeed=enemySpeed*0.65;
+        moveEntity(e,ddx/dist*pSpeed,ddy/dist*pSpeed,delta,enemyRadius);
+      }
+    } else if (e.statue) {
+      // Estatua: siempre "sabe" el camino hacia vos (recalcula BFS como un
+      // hunter en persecución), pero sólo puede avanzar en los frames en que
+      // el jugador también se está moviendo — si estás quieto, se congela.
+      if(!e.path||e.path.length===0||e.pathTimer<=0) {
+        const pc=Math.max(0,Math.min(cols-1,Math.floor(player.x/size)));
+        const pr=Math.max(0,Math.min(rows-1,Math.floor(player.y/size)));
+        const ec=Math.max(0,Math.min(cols-1,Math.floor(e.x/size)));
+        const er=Math.max(0,Math.min(rows-1,Math.floor(e.y/size)));
+        e.path=bfsPath(maze,ec,er,pc,pr,rows,cols);
+        e.pathTimer=0.6+Math.random()*0.4;
+      }
+      e.pathTimer-=delta;
+      if(moved && e.path && e.path.length>0) {
+        const next=e.path[0];
+        const tx=(next.x+0.5)*size, ty=(next.y+0.5)*size;
+        const ddx=tx-e.x, ddy=ty-e.y;
+        const dist=Math.hypot(ddx,ddy);
+        if(dist<2) { e.x=tx; e.y=ty; e.path.shift(); }
+        else {
+          const sSpeed=enemySpeed*0.9;
+          moveEntity(e,ddx/dist*sSpeed,ddy/dist*sSpeed,delta,enemyRadius);
+        }
+      }
+    } else {
+      // Hunter / enemigo común: percepción + persecución, o deambular al azar.
+
+      // Percepción del hunter: se evalúa TODOS los frames (no sólo cuando
+      // toca recalcular camino), porque tanto ver al jugador como el conteo
+      // de los 4 segundos sin verlo dependen del tiempo real transcurrido.
+      // Mientras el señuelo está activo y ya te estaba persiguiendo, no
+      // vuelve a chequear si te ve de verdad: queda distraído con el señuelo.
+      if (e.hunter) {
+        if (decoyActive && e.huntState === 'chase') {
+          // Distraído por el señuelo.
+        } else {
+          const canSee = canHunterSeePlayer(e);
+          if (canSee) {
+            e.lostSightTimer = 0;
+            if (e.huntState !== 'chase') {
+              e.huntState = 'chase';
+              e.path = []; e.pathTimer = 0;
+            }
+          } else if (e.huntState === 'chase') {
+            e.lostSightTimer += delta;
+            if (e.lostSightTimer >= HUNTER_LOSE_SIGHT_TIME) {
+              e.huntState = 'wander';
+              e.path = []; e.pathTimer = 0;
+            }
+          }
+        }
+      }
+
+      if(!e.path||e.path.length===0||e.pathTimer<=0) {
+        const pc=Math.max(0,Math.min(cols-1,Math.floor(player.x/size)));
+        const pr=Math.max(0,Math.min(rows-1,Math.floor(player.y/size)));
+        const ec=Math.max(0,Math.min(cols-1,Math.floor(e.x/size)));
+        const er=Math.max(0,Math.min(rows-1,Math.floor(e.y/size)));
+        const chasing = e.hunter && e.huntState==='chase';
+        if(chasing) {
+          const tgtX = decoyActive ? Math.max(0,Math.min(cols-1,Math.floor(decoyX/size))) : pc;
+          const tgtY = decoyActive ? Math.max(0,Math.min(rows-1,Math.floor(decoyY/size))) : pr;
+          e.path=bfsPath(maze,ec,er,tgtX,tgtY,rows,cols);
+          e.pathTimer=0.5+Math.random()*0.3; // recalcula más seguido mientras persigue
+        } else {
+          const nb=getNeighbors(maze,ec,er);
+          e.path=nb.length?[nb[Math.floor(Math.random()*nb.length)]]:[];
+          e.pathTimer=0.8+Math.random()*0.8;
+        }
+      }
+      e.pathTimer-=delta;
+
+      if(e.path&&e.path.length>0) {
+        const next=e.path[0];
+        const tx=(next.x+0.5)*size, ty=(next.y+0.5)*size;
+        const ddx=tx-e.x, ddy=ty-e.y;
+        const dist=Math.hypot(ddx,ddy);
+        if(dist<2) {
+          e.x=tx; e.y=ty;
+          e.path.shift();
+        } else {
+          const mvx=ddx/dist*enemySpeed, mvy=ddy/dist*enemySpeed;
+          moveEntity(e,mvx,mvy,delta,enemyRadius);
+          // El hunter actualiza hacia dónde "mira" según hacia dónde se mueve,
+          // eso define su cono de visión frontal.
+          if (e.hunter) { e.facingX = ddx/dist; e.facingY = ddy/dist; }
+        }
       }
     }
 
@@ -779,7 +990,7 @@ function update(delta) {
           shieldBlinkFlip=0;
           shieldRemaining=0;
           spawnParticles(player.x,player.y,'#00f5ff',20,120,0.6);
-          score+=50;
+          addScore(50);
         } else if(!shieldActive && !shieldBlinking) {
           // Shield powerup restored shield but wasn't manually active — treat as hit
           sfxShieldHit();
@@ -788,7 +999,7 @@ function update(delta) {
           shieldBlinkVisible=true;
           shieldBlinkFlip=0;
           spawnParticles(player.x,player.y,'#00f5ff',20,120,0.6);
-          score+=50;
+          addScore(50);
         }
         // Snap enemy back to nearest cell center so it doesn't get stuck
         const ec2=Math.round((e.x/size)-0.5), er2=Math.round((e.y/size)-0.5);
@@ -810,6 +1021,7 @@ function handleDeath() {
   sfxDeath();
   spawnParticles(player.x,player.y,'#ff2244',30,140,0.8);
   lives--;
+  levelHitOccurred=true; // rompe la racha de "nivel sin perder vidas"
   if(lives<=0) {
     running=false;
     clearInterval(timerInterval);
@@ -830,6 +1042,27 @@ function getNeighbors(mz,cx,cy) {
   if(!cell.walls[2]&&cy<rows-1) n.push({x:cx,y:cy+1});
   if(!cell.walls[3]&&cx>0) n.push({x:cx-1,y:cy});
   return n;
+}
+
+// Genera una ruta fija para un enemigo "patrulla": un recorrido al azar de
+// `length` pasos evitando retroceder inmediatamente sobre sus pasos, y
+// luego arma un ciclo ida-y-vuelta para que la recorra en loop para siempre.
+function generatePatrolRoute(startCx, startCy, length) {
+  const route=[{x:startCx,y:startCy}];
+  let cx=startCx, cy=startCy;
+  let prevCx=-1, prevCy=-1;
+  for(let i=0;i<length;i++) {
+    const nb=getNeighbors(maze,cx,cy);
+    const filtered=nb.filter(n=>!(n.x===prevCx&&n.y===prevCy));
+    const options=filtered.length?filtered:nb;
+    if(!options.length) break;
+    const next=options[Math.floor(Math.random()*options.length)];
+    prevCx=cx; prevCy=cy;
+    route.push(next);
+    cx=next.x; cy=next.y;
+  }
+  // Ida y vuelta: A,B,C,D,C,B,(vuelve a A) sin duplicar los extremos.
+  return route.concat(route.slice(1,-1).reverse());
 }
 
 // ─── DRAW ────────────────────────────────────
@@ -902,19 +1135,22 @@ function drawMaze(colors) {
 function drawEnd(colors) {
   const ex=endCell.x*size+size/2, ey=endCell.y*size+size/2;
   const t=Date.now()/1000;
+  const locked = !hasKey;
   const pulse = GFX.endGlow ? Math.sin(t*3)*0.2+0.8 : 1.0;
   const outerR=size*0.4*pulse;
+  const endColor = locked ? '#777788' : colors.end;
+  const endGlowColor = locked ? '#777788' : colors.endGlow;
 
-  if(GFX.endGlow) { ctx.shadowColor=colors.endGlow; ctx.shadowBlur=20*pulse; }
+  if(GFX.endGlow) { ctx.shadowColor=endGlowColor; ctx.shadowBlur=20*pulse; }
 
-  ctx.strokeStyle=colors.end;
+  ctx.strokeStyle=endColor;
   ctx.lineWidth=1.5;
   ctx.beginPath();
   ctx.arc(ex,ey,outerR,0,Math.PI*2);
   ctx.stroke();
 
   if(GFX.endGlow) {
-    ctx.fillStyle=colors.end;
+    ctx.fillStyle=endColor;
     ctx.globalAlpha=0.3*pulse;
     ctx.beginPath();
     ctx.arc(ex,ey,outerR*0.6,0,Math.PI*2);
@@ -922,12 +1158,22 @@ function drawEnd(colors) {
     ctx.globalAlpha=1;
   }
 
-  ctx.fillStyle=colors.end;
-  ctx.beginPath();
-  const s=size*0.18;
-  ctx.moveTo(ex,ey-s);ctx.lineTo(ex+s,ey);ctx.lineTo(ex,ey+s);ctx.lineTo(ex-s,ey);
-  ctx.closePath();
-  ctx.fill();
+  if(locked) {
+    // Bloqueada: ícono de candado en vez del diamante habitual.
+    ctx.shadowBlur=0;
+    ctx.fillStyle='#ff6677';
+    ctx.font=`${Math.floor(size*0.4)}px Arial`;
+    ctx.textAlign='center';
+    ctx.textBaseline='middle';
+    ctx.fillText('🔒', ex, ey+1);
+  } else {
+    ctx.fillStyle=endColor;
+    ctx.beginPath();
+    const s=size*0.18;
+    ctx.moveTo(ex,ey-s);ctx.lineTo(ex+s,ey);ctx.lineTo(ex,ey+s);ctx.lineTo(ex-s,ey);
+    ctx.closePath();
+    ctx.fill();
+  }
 
   ctx.shadowBlur=0;
 }
@@ -984,8 +1230,14 @@ function drawEnemies() {
   enemies.forEach((e,i)=>{
     const frozen=freezeEnemies>0;
     const hunterChasing = e.hunter && e.huntState==='chase';
+    const statueActive = e.statue && playerMoved;
     let color, glowColor;
     if (frozen) { color='#00aaff'; glowColor='#00aaff'; }
+    else if (e.patrol) { color='#00ffcc'; glowColor='#00ffcc'; }
+    else if (e.statue) {
+      color = statueActive ? '#ff4466' : '#9999aa';
+      glowColor = statueActive ? '#ff4466' : '#7777aa';
+    }
     else if (e.hunter) {
       color = hunterChasing ? '#ff0044' : '#aa44ff';
       glowColor = hunterChasing ? '#ff0066' : '#8822ff';
@@ -997,7 +1249,12 @@ function drawEnemies() {
     if(GFX.gradients) {
       const pulse=Math.sin(t*4+i)*0.15+0.85;
       const grad=ctx.createRadialGradient(e.x-1,e.y-2,0,e.x,e.y,enemyRadius);
-      grad.addColorStop(0,frozen?'#44ccff':e.hunter?(hunterChasing?'#ff6688':'#cc88ff'):'#ff8866');
+      const stop0 = frozen?'#44ccff'
+        : e.patrol?'#66ffee'
+        : e.statue?(statueActive?'#ff8899':'#bbbbdd')
+        : e.hunter?(hunterChasing?'#ff6688':'#cc88ff')
+        : '#ff8866';
+      grad.addColorStop(0,stop0);
       grad.addColorStop(1,color);
       ctx.fillStyle=grad;
       ctx.beginPath();
@@ -1009,9 +1266,9 @@ function drawEnemies() {
     }
     ctx.fill();
 
-    // Eye (always draw, cheap)
+    // Eye (always draw, cheap) — la estatua tiene ojos rojos, más inquietante
     ctx.shadowBlur=0;
-    ctx.fillStyle='white';
+    ctx.fillStyle= e.statue ? '#ff2244' : 'white';
     ctx.beginPath();
     const eyeX=e.x+(player.x-e.x>0?2:-2);
     const eyeY=e.y+(player.y-e.y>0?2:-2)*0.5;
@@ -1075,6 +1332,90 @@ function drawFog(colors) {
   }
 }
 
+// ─── HAZARDS: TRAMPAS / TELETRANSPORTADORES / LLAVE ──
+function drawTraps() {
+  traps.forEach(trap=>{
+    if(fogOfWar&&revealedCells&&!revealedCells[trap.cy][trap.cx]) return;
+    const s=size*0.32;
+    if(GFX.entityGlow) { ctx.shadowColor='#ff2244'; ctx.shadowBlur=8; }
+    ctx.strokeStyle='#ff2244';
+    ctx.fillStyle='#ff224466';
+    ctx.lineWidth=1.3;
+    for(let k=-1;k<=1;k++) {
+      const bx=trap.x+k*s*0.7;
+      ctx.beginPath();
+      ctx.moveTo(bx-s*0.28, trap.y+s*0.55);
+      ctx.lineTo(bx, trap.y-s*0.55);
+      ctx.lineTo(bx+s*0.28, trap.y+s*0.55);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.shadowBlur=0;
+  });
+}
+
+function drawTeleporters() {
+  const t=Date.now()/1000;
+  teleporters.forEach(tp=>{
+    if(fogOfWar&&revealedCells&&!revealedCells[tp.cy][tp.cx]) return;
+    const pulse=Math.sin(t*4+tp.pairId)*0.2+0.8;
+    const r=size*0.32*pulse;
+    if(GFX.entityGlow) { ctx.shadowColor=tp.color; ctx.shadowBlur=14*pulse; }
+    ctx.strokeStyle=tp.color;
+    ctx.lineWidth=2;
+    ctx.beginPath();
+    ctx.arc(tp.x,tp.y,r,0,Math.PI*2);
+    ctx.stroke();
+    ctx.fillStyle=tp.color+'55';
+    ctx.beginPath();
+    ctx.arc(tp.x,tp.y,r*0.5,0,Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+  });
+}
+
+function drawKey() {
+  if(!keyItem||keyItem.collected) return;
+  if(fogOfWar&&revealedCells&&!revealedCells[keyItem.cy][keyItem.cx]) return;
+  const t=Date.now()/1000;
+  const bob=Math.sin(t*3)*3;
+  if(GFX.powerupGlow) { ctx.shadowColor='#ffe600'; ctx.shadowBlur=16; }
+  ctx.fillStyle='white';
+  ctx.font=`${Math.floor(size*0.5)}px Arial`;
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.fillText('🔑', keyItem.x, keyItem.y+bob);
+  ctx.shadowBlur=0;
+}
+
+function drawDecoy() {
+  if(!decoyActive) return;
+  const t=Date.now()/1000;
+  if(GFX.entityGlow) { ctx.shadowColor='#ff66ff'; ctx.shadowBlur=14; }
+  ctx.globalAlpha=0.55+Math.sin(t*10)*0.15;
+  ctx.fillStyle='#ff66ff';
+  ctx.beginPath();
+  ctx.arc(decoyX,decoyY,playerRadius,0,Math.PI*2);
+  ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.globalAlpha=1;
+}
+
+function drawXrayPath() {
+  if(xrayTimer<=0||!xrayPath||!xrayPath.length) return;
+  const t=Date.now()/1000;
+  ctx.globalAlpha=0.5+Math.sin(t*6)*0.15;
+  ctx.fillStyle='#00ff88';
+  xrayPath.forEach(c=>{
+    const x=(c.x+0.5)*size, y=(c.y+0.5)*size;
+    ctx.beginPath();
+    ctx.arc(x,y,Math.max(2,size*0.08),0,Math.PI*2);
+    ctx.fill();
+  });
+  ctx.globalAlpha=1;
+}
+
 function draw() {
   const colors=getLevelColors();
   ctx.fillStyle=colors.bg;
@@ -1091,8 +1432,13 @@ function draw() {
   }
 
   drawMaze(colors);
+  drawTraps();
+  drawTeleporters();
+  drawKey();
+  drawXrayPath();
   drawEnd(colors);
   drawPowerups();
+  drawDecoy();
   drawTrail();
   drawPlayer();
   drawEnemies();
@@ -1129,8 +1475,16 @@ function getLevelConfig(lvl) {
   // 2 niveles, hasta un máximo de 5 (absorbe la curva de dificultad que
   // antes tenía el enemigo "smart", ya eliminado).
   const hunterEnemies = lvl>=3 ? Math.min(1+Math.floor((lvl-3)/2), 5) : 0;
+  // Patrulla: ronda fija predecible, útil para vigilar pasillos. Desde nivel 2.
+  const patrolEnemies = lvl>=2 ? Math.min(1+Math.floor((lvl-2)/3), 3) : 0;
+  // Estatua: sólo se mueve cuando vos te movés. Desde nivel 4.
+  const statueEnemies = lvl>=4 ? Math.min(1+Math.floor((lvl-4)/3), 2) : 0;
   const hasFog = lvl>=5;
-  return { mazeSize, enemyCount, hunterEnemies, hasFog };
+  // Trampas desde nivel 2, teletransportadores y llave desde nivel 4.
+  const trapCount = lvl>=2 ? Math.min(1+Math.floor(lvl/3), 6) : 0;
+  const teleporterPairs = lvl>=4 ? Math.min(1+Math.floor((lvl-4)/4), 2) : 0;
+  const needsKey = lvl>=4;
+  return { mazeSize, enemyCount, hunterEnemies, patrolEnemies, statueEnemies, hasFog, trapCount, teleporterPairs, needsKey };
 }
 
 // ─── START GAME ──────────────────────────────
@@ -1139,12 +1493,13 @@ function startGame() {
   score=0;
   lives=3;
   timerSeconds=0;
+  winStreak=0;
   initLevel();
 }
 
 function nextLevel() {
   currentLevel++;
-  score+=Math.max(0, 1000 - timerSeconds*5);
+  addScore(Math.max(0, 1000 - timerSeconds*5));
   initLevel();
 }
 
@@ -1183,9 +1538,22 @@ function initLevel() {
   speedBoost=0;
   freezeEnemies=0;
 
+  // Power-ups / hazards nuevos: se resetean en cada nivel
+  decoyActive=false;
+  decoyTimer=0;
+  doubleScoreTimer=0;
+  xrayTimer=0;
+  xrayPath=null;
+  trapInvulnTimer=0;
+  teleportCooldownTimer=0;
+  lockedToastTimer=0;
+  levelHitOccurred=false;
+
   // Enemies — spawn at cell centers, well away from player start
   enemies=[];
   const hunterCount = Math.min(cfg.hunterEnemies, cfg.enemyCount);
+  const patrolCount = Math.min(cfg.patrolEnemies, Math.max(0, cfg.enemyCount-hunterCount));
+  const statueCount = Math.min(cfg.statueEnemies, Math.max(0, cfg.enemyCount-hunterCount-patrolCount));
   const HUNTER_DIRS = [{x:1,y:0},{x:-1,y:0},{x:0,y:1},{x:0,y:-1}];
   for(let i=0;i<cfg.enemyCount;i++) {
     let cx,cy;
@@ -1196,12 +1564,14 @@ function initLevel() {
       attempts++;
     } while(attempts<200 && (cx+cy)<6); // Manhattan dist from (0,0) >= 6
     const hunter = i<hunterCount;
+    const patrol = !hunter && i<hunterCount+patrolCount;
+    const statue = !hunter && !patrol && i<hunterCount+patrolCount+statueCount;
     // Snap pixel position to exact cell center using current size
     const enemy = {
       cx, cy,
       x:(cx+0.5)*size,
       y:(cy+0.5)*size,
-      path:[], pathTimer:0, hunter
+      path:[], pathTimer:0, hunter, patrol, statue
     };
     if (hunter) {
       // Arranca deambulando, sin haber visto al jugador todavía.
@@ -1210,11 +1580,16 @@ function initLevel() {
       enemy.facingY = dir.y;
       enemy.huntState = 'wander';
       enemy.lostSightTimer = HUNTER_LOSE_SIGHT_TIME;
+    } else if (patrol) {
+      // Ruta fija de patrulla: entre 8 y 13 pasos, recorrida en loop.
+      enemy.patrolRoute = generatePatrolRoute(cx, cy, 8+Math.floor(Math.random()*6));
+      enemy.patrolIndex = 0;
     }
     enemies.push(enemy);
   }
 
   spawnPowerups();
+  spawnHazards(cfg);
 
   // Timer
   clearInterval(timerInterval);
@@ -1236,6 +1611,16 @@ function initLevel() {
 function checkWin() {
   const ex=(endCell.x+0.5)*size, ey=(endCell.y+0.5)*size;
   if(Math.hypot(player.x-ex,player.y-ey)<playerRadius+8) {
+    if(!hasKey) {
+      // Salida bloqueada: falta encontrar la llave. Avisa con un toast
+      // limitado en frecuencia para no spamear mientras estás parado ahí.
+      if(lockedToastTimer<=0) {
+        showToast('🔒 NECESITÁS LA LLAVE');
+        lockedToastTimer=2.0;
+      }
+      return;
+    }
+
     running=false;
     clearInterval(timerInterval);
     sfxWin();
@@ -1243,7 +1628,13 @@ function checkWin() {
 
     // Bonus
     const bonus=Math.max(0,1000-timerSeconds*5);
-    score+=bonus+currentLevel*100;
+    addScore(bonus+currentLevel*100);
+
+    // Racha sin perder vidas: si este nivel se completó sin ningún golpe,
+    // suma a la racha y otorga un bonus creciente a partir del 2do nivel seguido.
+    if(!levelHitOccurred) { winStreak++; } else { winStreak=0; }
+    const streakBonus = winStreak>1 ? (winStreak-1)*150 : 0;
+    if(streakBonus>0) addScore(streakBonus);
 
     const mins=Math.floor(timerSeconds/60);
     const secs=timerSeconds%60;
@@ -1259,6 +1650,10 @@ function checkWin() {
     document.getElementById('finalScore').textContent=String(score).padStart(5,'0');
     document.getElementById('finalLevel').textContent=String(currentLevel).padStart(2,'0');
     document.getElementById('newRecord').classList.toggle('hidden',!isRecord);
+    const streakEl=document.getElementById('finalStreak');
+    if(streakEl) streakEl.textContent=String(winStreak).padStart(2,'0');
+    const streakNote=document.getElementById('streakBonusNote');
+    if(streakNote) streakNote.classList.toggle('hidden', streakBonus<=0);
 
     setTimeout(()=>{
       document.getElementById('game').classList.remove('active');
