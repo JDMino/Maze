@@ -1,6 +1,8 @@
 // ============================================
 //  NEXUS MAZE — Cyberpunk Labyrinth Engine
 //  Complete rewrite with enhanced mechanics
+//  (con fix de resize/rotación: entidades ya no
+//   quedan atrapadas en paredes al cambiar tamaño)
 // ============================================
 
 const canvas = document.getElementById("canvas");
@@ -193,6 +195,15 @@ function sfxShieldOn() {
 }
 
 // ─── RESPONSIVE ──────────────────────────────
+// FIX: al cambiar el tamaño (resize/rotación) el tamaño de celda "size"
+// cambia, pero las posiciones de jugador/enemigos/powerups estaban guardadas
+// en píxeles absolutos calculados con el "size" anterior. Eso hacía que,
+// tras el resize, la misma posición en píxeles cayera en una celda distinta
+// (con paredes en otro lado) y las entidades quedaran "dentro" de una pared,
+// trabadas para siempre porque moveEntity nunca deja avanzar desde un punto
+// que ya colisiona. La solución es reescalar todas las posiciones en la
+// misma proporción en que cambió "size", e invalidar el caché del laberinto
+// (estaba dibujado sobre un canvas con el tamaño viejo).
 function resizeCanvas() {
   const hud = document.getElementById('hud');
   const tc = document.getElementById('touchControls');
@@ -200,15 +211,65 @@ function resizeCanvas() {
   const tcH = (window.innerWidth < 768 && tc) ? tc.offsetHeight : 0;
   const maxW = window.innerWidth - 4;
   const maxH = window.innerHeight - hudH - tcH - 4;
+
+  const oldSize = size;
   size = Math.floor(Math.min(maxW / cols, maxH / rows));
   size = Math.max(12, Math.min(size, 36));
   canvas.width = size * cols;
   canvas.height = size * rows;
   playerRadius = Math.max(3, Math.floor(size * 0.22));
   enemyRadius = Math.max(3, Math.floor(size * 0.22));
-  if (fogRadius === 0 && fogOfWar) fogRadius = size * 3.5;
+
+  if (fogOfWar) {
+    fogRadius = fogRadius > 0 ? (fogRadius / oldSize) * size : size * 3.5;
+  }
+
+  // Reescalar posiciones existentes para que sigan cayendo en la misma
+  // celda lógica de la grilla, evitando que queden "dentro" de una pared.
+  if (maze && oldSize && oldSize !== size) {
+    const scale = size / oldSize;
+
+    if (player) {
+      player.x *= scale;
+      player.y *= scale;
+    }
+
+    enemies.forEach(e => {
+      e.x *= scale;
+      e.y *= scale;
+      // Se descarta el path viejo: fue calculado para la grilla anterior
+      // y sus coordenadas de celda podrían ya no corresponder.
+      e.path = [];
+      e.pathTimer = 0;
+    });
+
+    // Los powerups guardan cx/cy (coordenadas de celda), así que se
+    // recalculan directo desde ahí en vez de escalar x/y (más preciso).
+    powerups.forEach(p => {
+      p.x = (p.cx + 0.5) * size;
+      p.y = (p.cy + 0.5) * size;
+    });
+
+    // El trail y las partículas quedan con posiciones "viejas" que ya no
+    // tienen sentido visualmente tras el reescalado; se limpian.
+    playerTrail = [];
+    particles = [];
+
+    // El maze estaba cacheado en un offscreen canvas con el tamaño viejo.
+    invalidateMazeCache();
+  }
 }
-window.addEventListener('resize', () => { resizeCanvas(); });
+
+// Debounce del resize: en mobile, al rotar la pantalla el navegador puede
+// disparar varios eventos de resize seguidos mientras ajusta la UI
+// (barra de direcciones, etc.). Sin debounce, resizeCanvas() se ejecuta
+// varias veces con valores intermedios inestables, provocando saltos
+// visuales. Se espera un pequeño margen antes de aplicar el resize final.
+let resizeDebounceTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeDebounceTimer);
+  resizeDebounceTimer = setTimeout(() => { resizeCanvas(); }, 120);
+});
 
 // ─── INPUT ───────────────────────────────────
 document.addEventListener("keydown", e => {
